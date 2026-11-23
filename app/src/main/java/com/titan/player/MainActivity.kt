@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private val displayedChannels = mutableListOf<ChannelItem>()
     private val favoriteUrls = mutableSetOf<String>()
     private val epgCache = mutableMapOf<String, EpgProgram>()
+    private val fetchingEpgIds = mutableSetOf<String>()
 
     private var miniPlayer: ExoPlayer? = null
     private lateinit var miniPlayerBox: FrameLayout
@@ -526,5 +527,4 @@ class MainActivity : AppCompatActivity() {
 
             holder.card.setOnClickListener {
                 if (item.type == "LIVE") {
-                    startMiniPlayer(item)
-                } 
+    
