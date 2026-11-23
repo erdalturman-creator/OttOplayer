@@ -37,7 +37,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
     implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.4.1+1")
+    implementation("com.github.anilbeesetti.nextlib:nextlib-media3ext:0.8.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 }
