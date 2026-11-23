@@ -14,6 +14,7 @@ import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.*
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
@@ -44,7 +45,7 @@ data class AccountProfile(val profileName: String, val mode: String, val server:
 
 class MainActivity : AppCompatActivity() {
 
-    private val client = OkHttpClient.Builder().connectTimeout(25, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).retryOnConnectionFailure(true).build()
     private val gson = Gson()
     private val allChannels = mutableListOf<ChannelItem>()
     private val displayedChannels = mutableListOf<ChannelItem>()
@@ -74,7 +75,7 @@ class MainActivity : AppCompatActivity() {
         buildMainInterface()
         loadCachedOrFetch()
     }
-
+// P1
     @OptIn(UnstableApi::class)
     private fun buildMainInterface() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.parseColor("#0B0D13")) }
@@ -165,7 +166,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(bottomNav)
         setContentView(root)
     }
-
+// P2
     inner class ChannelGridAdapter : RecyclerView.Adapter<ChannelGridAdapter.Holder>() {
         inner class Holder(val card: LinearLayout, val ivLogo: ImageView, val tvFallback: TextView, val btnFav: TextView, val tvName: TextView, val tvEpgTitle: TextView, val tvEpgTime: TextView, val progress: ProgressBar) : RecyclerView.ViewHolder(card)
 
@@ -203,9 +204,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val item = displayedChannels[position]
-            holder.tvName.text = item.name
-            holder.tvFallback.text = item.name.take(14)
-
+            holder.tvName.text = item.name; holder.tvFallback.text = item.name.take(14)
             if (item.logo.startsWith("http")) {
                 holder.ivLogo.visibility = View.VISIBLE
                 holder.ivLogo.load(item.logo) {
@@ -229,9 +228,7 @@ class MainActivity : AppCompatActivity() {
                 if (item.type == "LIVE" && item.streamId.isNotEmpty()) fetchShortEpgForChannel(item.streamId, position)
             }
 
-            holder.card.setOnClickListener {
-                if (item.type == "LIVE") startMiniPlayer(item) else { stopMiniPlayer(); openFullPlayer(item) }
-            }
+            holder.card.setOnClickListener { if (item.type == "LIVE") startMiniPlayer(item) else { stopMiniPlayer(); openFullPlayer(item) } }
         }
     }
 
@@ -250,25 +247,21 @@ class MainActivity : AppCompatActivity() {
     private fun openFullPlayer(item: ChannelItem) {
         startActivity(Intent(this, PlayerActivity::class.java).apply { putExtra("STREAM_URL", item.url); putExtra("STREAM_TITLE", item.name) })
     }
-
+// P3
     private fun fetchShortEpgForChannel(streamId: String, adapterPos: Int) {
         if (fetchingEpgIds.contains(streamId)) return
-        val profiles = getSavedProfiles()
-        val idx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
-        val active = profiles.getOrNull(idx) ?: return
+        val active = getSavedProfiles().getOrNull(getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)) ?: return
         if (active.mode != "XTREAM") return
         fetchingEpgIds.add(streamId)
         Thread {
             try {
-                val url = "${active.server}/player_api.php?username=${active.user}&password=${active.pass}&action=get_short_epg&stream_id=$streamId&limit=1"
-                val res = client.newCall(Request.Builder().url(url).build()).execute().body?.string() ?: return@Thread
+                val res = httpGetString("${active.server}/player_api.php?username=${active.user}&password=${active.pass}&action=get_short_epg&stream_id=$streamId&limit=1")
                 val listings = JsonParser.parseString(res).asJsonObject.getAsJsonArray("epg_listings") ?: return@Thread
                 if (listings.size() > 0) {
                     val first = listings[0].asJsonObject
                     val raw = first.get("title")?.asString ?: ""
                     val title = try { String(Base64.decode(raw, Base64.DEFAULT), Charsets.UTF_8) } catch (_: Exception) { raw }
-                    val s = first.get("start_timestamp")?.asLong ?: 0L
-                    val e = first.get("stop_timestamp")?.asLong ?: 0L
+                    val s = first.get("start_timestamp")?.asLong ?: 0L; val e = first.get("stop_timestamp")?.asLong ?: 0L
                     val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
                     val range = if (s > 0 && e > 0) "${fmt.format(Date(s * 1000))} – ${fmt.format(Date(e * 1000))}" else ""
                     val now = System.currentTimeMillis() / 1000
@@ -309,8 +302,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveProfiles(list: List<AccountProfile>, activeIndex: Int) = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).edit().putString("PROFILES_JSON", gson.toJson(list)).putInt("ACTIVE_INDEX", activeIndex).apply()
 
     private fun loadCachedOrFetch() {
-        val profiles = getSavedProfiles()
-        val idx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
+        val profiles = getSavedProfiles(); val idx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
         if (profiles.getOrNull(idx) == null) { tvStatusBanner.text = "Sağ alttaki 'Hesaplar' sekmesinden liste ekleyin."; return }
         val file = getCacheFile(idx)
         if (file.exists()) {
@@ -321,50 +313,98 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun forceRefreshActiveAccount() {
-        val profiles = getSavedProfiles()
-        val idx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
+        val profiles = getSavedProfiles(); val idx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
         val active = profiles.getOrNull(idx) ?: run { showAccountDialog(); return }
-        val url = if (active.mode == "M3U") active.m3uUrl else "${active.server}/get.php?username=${active.user}&password=${active.pass}&type=m3u_plus&output=ts"
-        fetchM3uPlaylist(url, active.profileName, idx)
+        if (active.mode == "XTREAM") fetchXtreamFastApi(active, idx) else fetchM3uStreamed(active.m3uUrl, active.profileName, idx)
     }
 
-    private fun fetchM3uPlaylist(url: String, label: String, idx: Int) {
-        tvStatusBanner.text = "Kanallar, logolar ve EPG indiriliyor..."
+    private fun fetchXtreamFastApi(acc: AccountProfile, idx: Int) {
+        runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); tvStatusBanner.text = "1/3: Canlı TV kanalları indiriliyor..." }
         Thread {
             try {
-                val body = client.newCall(Request.Builder().url(url).header("User-Agent", "VLC/3.0.18").build()).execute().body?.string() ?: ""
+                val baseApi = "${acc.server}/player_api.php?username=${acc.user}&password=${acc.pass}"
+                val result = mutableListOf<ChannelItem>()
+
+                val liveCats = fetchCategoryMap("$baseApi&action=get_live_categories")
+                val liveJson = httpGetString("$baseApi&action=get_live_streams")
+                if (liveJson.startsWith("[")) for (el in JsonParser.parseString(liveJson).asJsonArray) {
+                    val o = el.asJsonObject; val name = o.get("name")?.asString ?: continue; val sid = o.get("stream_id")?.asString ?: continue
+                    result.add(ChannelItem(name, "${acc.server}/live/${acc.user}/${acc.pass}/$sid.ts", liveCats[o.get("category_id")?.asString ?: ""] ?: "Canlı TV", "LIVE", o.get("stream_icon")?.asString ?: "", sid, o.get("epg_channel_id")?.asString ?: ""))
+                }
+                runOnUiThread { allChannels.clear(); allChannels.addAll(result); applyFilters(); tvStatusBanner.text = "2/3: Filmler indiriliyor (${result.size} kanal)..." }
+
+                val vodCats = fetchCategoryMap("$baseApi&action=get_vod_categories")
+                val vodJson = httpGetString("$baseApi&action=get_vod_streams")
+                if (vodJson.startsWith("[")) for (el in JsonParser.parseString(vodJson).asJsonArray) {
+                    val o = el.asJsonObject; val name = o.get("name")?.asString ?: continue; val sid = o.get("stream_id")?.asString ?: continue; val ext = o.get("container_extension")?.asString ?: "mp4"
+                    result.add(ChannelItem(name, "${acc.server}/movie/${acc.user}/${acc.pass}/$sid.$ext", vodCats[o.get("category_id")?.asString ?: ""] ?: "Filmler", "MOVIE", o.get("stream_icon")?.asString ?: "", sid))
+                }
+                runOnUiThread { allChannels.clear(); allChannels.addAll(result); applyFilters(); tvStatusBanner.text = "3/3: Diziler indiriliyor (${result.size} içerik)..." }
+
+                val serCats = fetchCategoryMap("$baseApi&action=get_series_categories")
+                val serJson = httpGetString("$baseApi&action=get_series")
+                if (serJson.startsWith("[")) for (el in JsonParser.parseString(serJson).asJsonArray) {
+                    val o = el.asJsonObject; val name = o.get("name")?.asString ?: continue; val sid = o.get("series_id")?.asString ?: continue
+                    result.add(ChannelItem(name, "${acc.server}/series/${acc.user}/${acc.pass}/$sid.mp4", serCats[o.get("category_id")?.asString ?: ""] ?: "Diziler", "SERIES", o.get("cover")?.asString ?: "", sid))
+                }
+
+                getCacheFile(idx).writeText(gson.toJson(result))
+                runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); allChannels.clear(); allChannels.addAll(result); applyFilters(); Toast.makeText(this, "${acc.profileName} tamamlandı (${result.size})", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) { runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); tvStatusBanner.text = "Hata: ${e.message}" } }
+        }.start()
+    }
+
+    private fun fetchCategoryMap(url: String): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        try {
+            val res = httpGetString(url)
+            if (res.startsWith("[")) for (el in JsonParser.parseString(res).asJsonArray) {
+                val o = el.asJsonObject; val id = o.get("category_id")?.asString ?: continue; map[id] = o.get("category_name")?.asString ?: "Genel"
+            }
+        } catch (_: Exception) {}
+        return map
+    }
+
+    private fun httpGetString(url: String): String {
+        client.newCall(Request.Builder().url(url).header("User-Agent", "VLC/3.0.18").header("Connection", "close").build()).execute().use { res ->
+            if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
+            return res.body?.string() ?: ""
+        }
+    }
+
+    private fun fetchM3uStreamed(url: String, label: String, idx: Int) {
+        runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); tvStatusBanner.text = "M3U indiriliyor..." }
+        Thread {
+            try {
                 val parsed = mutableListOf<ChannelItem>()
-                var name = "Bilinmeyen"; var grp = "Genel"; var logo = ""; var epgId = ""
-                val epRegex = Regex("""(?i)\b(s\d{1,2}\s*e\d{1,3}|\d{1,2}x\d{1,3}|sezon|bölüm|episode)\b""")
-                for (line in body.lines()) {
-                    val t = line.trim()
-                    if (t.startsWith("#EXTINF:")) {
-                        name = t.substringAfterLast(",").trim()
-                        grp = Regex("""group-title="([^"]*)"""").find(t)?.groupValues?.get(1) ?: "Genel"
-                        logo = Regex("""tvg-logo="([^"]*)"""").find(t)?.groupValues?.get(1) ?: ""
-                        epgId = Regex("""tvg-id="([^"]*)"""").find(t)?.groupValues?.get(1) ?: ""
-                    } else if (t.startsWith("http")) {
-                        val lu = t.lowercase(); val lg = grp.lowercase()
-                        val isSeries = lu.contains("/series/") || lg.contains("dizi") || lg.contains("series") || epRegex.containsMatchIn(name)
-                        val isMovie = !isSeries && (lu.contains("/movie/") || lg.contains("film") || lg.contains("movie") || lg.contains("sinema") || lg.contains("vod") || lu.endsWith(".mp4") || lu.endsWith(".mkv"))
-                        val type = if (isSeries) "SERIES" else if (isMovie) "MOVIE" else "LIVE"
-                        val sid = Regex("""/(\d+)\.(ts|m3u8|mp4|mkv)$""").find(lu)?.groupValues?.get(1) ?: ""
-                        parsed.add(ChannelItem(name, t, grp, type, logo, sid, epgId))
+                client.newCall(Request.Builder().url(url).header("User-Agent", "VLC/3.0.18").header("Connection", "close").build()).execute().use { res ->
+                    if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
+                    var name = "Bilinmeyen"; var grp = "Genel"; var logo = ""; var epgId = ""
+                    val epRegex = Regex("""(?i)\b(s\d{1,2}\s*e\d{1,3}|\d{1,2}x\d{1,3}|sezon|bölüm|episode)\b""")
+                    res.body?.byteStream()?.bufferedReader()?.forEachLine { line ->
+                        val t = line.trim()
+                        if (t.startsWith("#EXTINF:")) {
+                            name = t.substringAfterLast(",").trim(); grp = Regex("""group-title="([^"]*)"""").find(t)?.groupValues?.get(1) ?: "Genel"
+                            logo = Regex("""tvg-logo="([^"]*)"""").find(t)?.groupValues?.get(1) ?: ""; epgId = Regex("""tvg-id="([^"]*)"""").find(t)?.groupValues?.get(1) ?: ""
+                        } else if (t.startsWith("http")) {
+                            val lu = t.lowercase(); val lg = grp.lowercase()
+                            val isS = lu.contains("/series/") || lg.contains("dizi") || lg.contains("series") || epRegex.containsMatchIn(name)
+                            val isM = !isS && (lu.contains("/movie/") || lg.contains("film") || lg.contains("movie") || lg.contains("sinema") || lg.contains("vod") || lu.endsWith(".mp4") || lu.endsWith(".mkv"))
+                            parsed.add(ChannelItem(name, t, grp, if (isS) "SERIES" else if (isM) "MOVIE" else "LIVE", logo, Regex("""/(\d+)\.(ts|m3u8|mp4|mkv)$""").find(lu)?.groupValues?.get(1) ?: "", epgId))
+                        }
                     }
                 }
                 getCacheFile(idx).writeText(gson.toJson(parsed))
-                runOnUiThread { allChannels.clear(); allChannels.addAll(parsed); applyFilters(); Toast.makeText(this, "$label güncellendi (${parsed.size})", Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) { runOnUiThread { tvStatusBanner.text = "Hata: ${e.message}" } }
+                runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); allChannels.clear(); allChannels.addAll(parsed); applyFilters() }
+            } catch (e: Exception) { runOnUiThread { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); tvStatusBanner.text = "Hata: ${e.message}" } }
         }.start()
     }
 
     private fun showUserPanelDialog() {
-        val profiles = getSavedProfiles()
-        val activeIdx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
+        val profiles = getSavedProfiles(); val activeIdx = getSharedPreferences("TitanPrefs", Context.MODE_PRIVATE).getInt("ACTIVE_INDEX", 0)
         val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 20, 32, 12) }
         val lv = ListView(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, profiles.mapIndexed { i, p -> "${if (i == activeIdx) "✓ " else "• "}${p.profileName}" }) }
-        val dlg = AlertDialog.Builder(this).setTitle("Hesaplar").setView(container)
-            .setPositiveButton("+ Yeni Ekle") { _, _ -> showAccountDialog() }
+        val dlg = AlertDialog.Builder(this).setTitle("Hesaplar").setView(container).setPositiveButton("+ Yeni Ekle") { _, _ -> showAccountDialog() }
             .setNeutralButton("Sil") { _, _ -> if (activeIdx in profiles.indices) { getCacheFile(activeIdx).delete(); profiles.removeAt(activeIdx); saveProfiles(profiles, 0); allChannels.clear(); applyFilters() } }
             .setNegativeButton("Kapat", null).create()
         lv.setOnItemClickListener { _, _, pos, _ -> saveProfiles(profiles, pos); dlg.dismiss(); loadCachedOrFetch() }
@@ -373,23 +413,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAccountDialog() {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 20, 40, 12) }
-        val etName = EditText(this).apply { hint = "Hesap Adı" }
-        val etSrv = EditText(this).apply { hint = "Xtream Sunucu (http://...)" }
-        val etUsr = EditText(this).apply { hint = "Kullanıcı Adı" }
-        val etPwd = EditText(this).apply { hint = "Şifre" }
-        val etM3u = EditText(this).apply { hint = "veya M3U URL" }
+        val etName = EditText(this).apply { hint = "Hesap Adı" }; val etSrv = EditText(this).apply { hint = "Xtream Sunucu (http://...)" }
+        val etUsr = EditText(this).apply { hint = "Kullanıcı Adı" }; val etPwd = EditText(this).apply { hint = "Şifre" }; val etM3u = EditText(this).apply { hint = "veya M3U URL" }
         layout.addView(etName); layout.addView(etSrv); layout.addView(etUsr); layout.addView(etPwd); layout.addView(etM3u)
-        AlertDialog.Builder(this).setTitle("Hesap Ekle").setView(ScrollView(this).apply { addView(layout) })
-            .setPositiveButton("Kaydet") { _, _ ->
-                val pName = etName.text.toString().trim().ifEmpty { "IPTV" }
-                val m3u = etM3u.text.toString().trim()
-                val srv = etSrv.text.toString().trim().removeSuffix("/")
-                val usr = etUsr.text.toString().trim()
-                val pwd = etPwd.text.toString().trim()
-                val profiles = getSavedProfiles()
-                if (m3u.isNotEmpty()) { profiles.add(AccountProfile(pName, "M3U", m3uUrl = m3u)); saveProfiles(profiles, profiles.lastIndex); fetchM3uPlaylist(m3u, pName, profiles.lastIndex) }
-                else if (srv.isNotEmpty()) { profiles.add(AccountProfile(pName, "XTREAM", srv, usr, pwd)); saveProfiles(profiles, profiles.lastIndex); fetchM3uPlaylist("$srv/get.php?username=$usr&password=$pwd&type=m3u_plus&output=ts", pName, profiles.lastIndex) }
-            }.setNegativeButton("İptal", null).show()
+        AlertDialog.Builder(this).setTitle("Hesap Ekle").setView(ScrollView(this).apply { addView(layout) }).setPositiveButton("Kaydet") { _, _ ->
+            val pName = etName.text.toString().trim().ifEmpty { "IPTV" }; val m3u = etM3u.text.toString().trim(); val srv = etSrv.text.toString().trim().removeSuffix("/"); val usr = etUsr.text.toString().trim(); val pwd = etPwd.text.toString().trim()
+            val profiles = getSavedProfiles()
+            if (m3u.isNotEmpty()) { profiles.add(AccountProfile(pName, "M3U", m3uUrl = m3u)); saveProfiles(profiles, profiles.lastIndex); fetchM3uStreamed(m3u, pName, profiles.lastIndex) }
+            else if (srv.isNotEmpty()) { val acc = AccountProfile(pName, "XTREAM", srv, usr, pwd); profiles.add(acc); saveProfiles(profiles, profiles.lastIndex); fetchXtreamFastApi(acc, profiles.lastIndex) }
+        }.setNegativeButton("İptal", null).show()
     }
 
     override fun onStop() { super.onStop(); stopMiniPlayer() }
