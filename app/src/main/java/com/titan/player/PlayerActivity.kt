@@ -427,11 +427,12 @@ class PlayerActivity : AppCompatActivity() {
             var mediaUri: Uri? = null
             var fallbackFile: File? = null
             try {
-                val isHls = currentStreamUrl.lowercase().contains(".m3u8")
+                val lowerUrl = currentStreamUrl.lowercase()
+                val isHls = lowerUrl.contains(".m3u8")
                 val ext = when {
                     isHls -> ".ts"
-                    currentStreamUrl.lowercase().contains(".mkv") -> ".mkv"
-                    currentStreamUrl.lowercase().contains(".mp4") -> ".mp4"
+                    lowerUrl.contains(".mkv") -> ".mkv"
+                    lowerUrl.contains(".mp4") -> ".mp4"
                     else -> ".ts"
                 }
                 val mimeType = when (ext) {
@@ -478,4 +479,200 @@ class PlayerActivity : AppCompatActivity() {
                                 val buf = ByteArray(64 * 1024)
                                 var r: Int
                                 while (inp.read(buf).also { r = it } != -1) {
-     
+                                    out?.write(buf, 0, r)
+                                    totalBytesWritten += r
+                                }
+                            }
+                        }
+                        val now = System.currentTimeMillis()
+                        if (now - lastNotifTime > 1000 || index == segmentUrls.lastIndex) {
+                            lastNotifTime = now
+                            val mb = totalBytesWritten / (1024 * 1024)
+                            builder.setContentText("HLS İndiriliyor (${index + 1}/${segmentUrls.size}) - $mb MB")
+                            nm.notify(notifId, builder.build())
+                        }
+                    }
+                } else {
+                    val req = Request.Builder().url(currentStreamUrl).header("User-Agent", "VLC/3.0.18").build()
+                    downloadClient.newCall(req).execute().use { res ->
+                        if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
+                        val body = res.body ?: throw Exception("Boş yanıt")
+                        val total = body.contentLength()
+                        body.byteStream().use { inp ->
+                            val buf = ByteArray(64 * 1024)
+                            var r: Int
+                            while (inp.read(buf).also { r = it } != -1) {
+                                out?.write(buf, 0, r)
+                                totalBytesWritten += r
+                                val now = System.currentTimeMillis()
+                                if (now - lastNotifTime > 1000) {
+                                    lastNotifTime = now
+                                    val mb = totalBytesWritten / (1024 * 1024)
+                                    val text = if (total > 0) {
+                                        "İndiriliyor: $mb MB / ${total / (1024 * 1024)} MB (%${(totalBytesWritten * 100 / total).toInt()})"
+                                    } else {
+                                        "İndiriliyor: $mb MB..."
+                                    }
+                                    builder.setContentText(text)
+                                    nm.notify(notifId, builder.build())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                out?.flush()
+                out?.close()
+                out = null
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
+                    val doneValues = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                    contentResolver.update(mediaUri, doneValues, null, null)
+                }
+
+                val finalMb = totalBytesWritten / (1024 * 1024)
+                builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentText("Bitti: Download/OttOplayer/$fName ($finalMb MB)")
+                    .setOngoing(false)
+                nm.notify(notifId, builder.build())
+
+                mainHandler.post {
+                    Toast.makeText(this, "İndirme tamamlandı: $fName", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                try { out?.close() } catch (_: Exception) {}
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
+                    try { contentResolver.delete(mediaUri, null, null) } catch (_: Exception) {}
+                } else {
+                    fallbackFile?.delete()
+                }
+                builder.setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setContentText("Hata: ${e.message ?: "Bilinmeyen hata"}")
+                    .setOngoing(false)
+                nm.notify(notifId, builder.build())
+                mainHandler.post {
+                    Toast.makeText(this, "İndirme hatası: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                isDownloading = false
+            }
+        }.start()
+    }
+
+    private fun resolveHlsSegments(playlistUrl: String): List<String> {
+        val req = Request.Builder().url(playlistUrl).header("User-Agent", "VLC/3.0.18").build()
+        val content = downloadClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) throw Exception("Manifest HTTP ${res.code}")
+            res.body?.string() ?: throw Exception("Boş manifest")
+        }
+
+        val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val base = URL(playlistUrl)
+
+        val variantUrls = mutableListOf<String>()
+        val segmentUrls = mutableListOf<String>()
+
+        for (line in lines) {
+            if (line.startsWith("#")) continue
+            val resolved: String = URL(base, line).toString()
+            if (resolved.lowercase().contains(".m3u8")) {
+                variantUrls.add(resolved)
+            } else {
+                segmentUrls.add(resolved)
+            }
+        }
+
+        if (segmentUrls.isNotEmpty()) return segmentUrls
+        if (variantUrls.isNotEmpty()) return resolveHlsSegments(variantUrls.first())
+        return emptyList()
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun initializePlayer(url: String, startPositionMs: Long, playWhenReady: Boolean) {
+        player?.release()
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+
+        player = ExoPlayer.Builder(this, renderersFactory).build().also { exo ->
+            playerView.player = exo
+            exo.setMediaItem(MediaItem.fromUri(url))
+            exo.addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    btnPlayPause.setImageResource(
+                        if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+                    )
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Toast.makeText(
+                        this@PlayerActivity,
+                        "Hata: ${error.localizedMessage ?: error.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            })
+            exo.playWhenReady = playWhenReady
+            exo.prepare()
+            if (startPositionMs > 0L) {
+                exo.seekTo(startPositionMs)
+            }
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun showTrackDialog(trackType: Int) {
+        val exo = player ?: return
+        val opts = mutableListOf<String>()
+        val acts = mutableListOf<() -> Unit>()
+
+        if (trackType == C.TRACK_TYPE_TEXT) {
+            opts.add("Altyazıyı Kapat")
+            acts.add {
+                exo.trackSelectionParameters = exo.trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+                showGestureToast("Altyazı kapatıldı")
+            }
+        }
+
+        for (g in exo.currentTracks.groups) {
+            if (g.type == trackType) {
+                for (i in 0 until g.length) {
+                    if (g.isTrackSupported(i)) {
+                        val f = g.getTrackFormat(i)
+                        val label = f.label ?: "Parça ${i + 1}"
+                        val lang = f.language ?: "Dil"
+                        val selectedMark = if (g.isTrackSelected(i)) " ✓" else ""
+                        opts.add("$label ($lang)$selectedMark")
+                        acts.add {
+                            exo.trackSelectionParameters = exo.trackSelectionParameters
+                                .buildUpon()
+                                .setTrackTypeDisabled(trackType, false)
+                                .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i))
+                                .build()
+                            showGestureToast("$label seçildi")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (opts.isEmpty()) {
+            Toast.makeText(this, "Alternatif parça yok", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(if (trackType == C.TRACK_TYPE_AUDIO) "Ses Seçimi" else "Altyazı Seçimi")
+            .setItems(opts.toTypedArray()) { _, w -> acts[w]() }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
+    }
+}
+// SON
