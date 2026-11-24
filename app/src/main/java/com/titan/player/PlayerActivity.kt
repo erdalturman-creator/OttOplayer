@@ -123,7 +123,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private var currentChannelIndex = 0
     private var currentStreamUrl = ""
-    private var currentStreamTitle = "OttOplayer"
+    private var currentStreamTitle = "by erdal trmn tv player"
     private var currentItemMeta: MediaCatalogItem? = null
 
     private var isLocked = false
@@ -151,7 +151,7 @@ class PlayerActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val initialUrl = intent.getStringExtra("STREAM_URL")?.trim().orEmpty()
-        val initialTitle = intent.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
+        val initialTitle = intent.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "by erdal trmn tv player" }
 
         loadAccountsAndFavoritesAndCatalog(initialUrl, initialTitle)
 
@@ -328,7 +328,7 @@ class PlayerActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, 0, 14, 0) }
         }
         val badgeLabel = TextView(this).apply {
-            text = "1 STREAM"
+            text = "by erdal trmn tv player"
             setTextColor(Color.WHITE)
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
@@ -513,7 +513,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun loadAccountsAndFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val savedAccounts = prefs.getStringSet("account_profiles", setOf("Varsayılan Hesap")) ?: setOf("Varsayılan Hesap")
         accountProfiles.clear()
         accountProfiles.addAll(savedAccounts.filter { it.isNotBlank() }.ifEmpty { listOf("Varsayılan Hesap") })
@@ -761,14 +761,14 @@ class PlayerActivity : AppCompatActivity() {
     )
 
     private fun saveDeletedChannelUrls(urlsToAdd: Collection<String>) {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val existing = prefs.getStringSet("deleted_channel_urls", emptySet())?.toMutableSet() ?: mutableSetOf()
         existing.addAll(urlsToAdd)
         prefs.edit().putStringSet("deleted_channel_urls", existing).apply()
     }
 
     private fun saveDeletedCategory(section: MediaHubSection, categoryName: String) {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val existing = prefs.getStringSet("deleted_category_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
         existing.add("${section.name}::${categoryName.uppercase(Locale.getDefault())}")
         prefs.edit().putStringSet("deleted_category_keys", existing).apply()
@@ -807,14 +807,14 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun saveCustomChannel(title: String, url: String) {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val existing = prefs.getStringSet("custom_channel_entries", emptySet())?.toMutableSet() ?: mutableSetOf()
         existing.add("$title|||$url")
         prefs.edit().putStringSet("custom_channel_entries", existing).apply()
     }
 
     private fun persistAccounts() {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putStringSet("account_profiles", accountProfiles.toSet())
             .putString("active_account", activeAccount)
@@ -823,7 +823,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun toggleFavoriteForCurrentItem() {
         if (currentStreamUrl.isEmpty()) return
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         if (favoriteUrls.contains(currentStreamUrl)) {
             favoriteUrls.remove(currentStreamUrl)
             showGestureToast("Favorilerden çıkarıldı")
@@ -835,7 +835,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showInitialCategoryHubDialog() {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
 
         val root = LinearLayout(this).apply {
@@ -851,10 +851,11 @@ class PlayerActivity : AppCompatActivity() {
         }
         topHeader.addView(
             TextView(this).apply {
-                text = "OTTODPLAYER · $activeAccount"
+                text = "by erdal trmn tv player · $activeAccount"
                 setTextColor(Color.WHITE)
-                textSize = 16f
+                textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
+                maxLines = 1
                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             }
         )
@@ -1053,7 +1054,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun triggerCatalogUpdate() {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         prefs.edit().remove("deleted_category_keys").apply()
         loadAccountsAndFavoritesAndCatalog(currentStreamUrl, currentStreamTitle)
         updateHudLabels()
@@ -1165,7 +1166,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showLiveTvCatalogDialog() {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
 
         fun currentLiveSource() = activeItems.filter { it.section == MediaHubSection.LIVE_TV }
@@ -1196,7 +1197,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         topBar.addView(
             TextView(this).apply {
-                text = "1 STREAM · Canlı TV (Listeyi silmek için basılı tutun)"
+                text = "by erdal trmn tv player · Canlı TV"
                 setTextColor(Color.WHITE)
                 textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
@@ -1354,7 +1355,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showVodCatalogDialog(section: MediaHubSection) {
-        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
         val defaultCats = listOf("TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
 
@@ -2445,14 +2446,14 @@ class StreamDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val streamUrl = intent?.getStringExtra("STREAM_URL")?.trim().orEmpty()
-        val streamTitle = intent?.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
+        val streamTitle = intent?.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "by erdal trmn tv player" }
 
         if (streamUrl.isEmpty()) {
             stopIfIdle()
             return START_NOT_STICKY
         }
 
-        val chId = "ottoplayer_bg_dl"
+        val chId = "erdal_trmn_tv_player_bg_dl"
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
@@ -2500,7 +2501,7 @@ class StreamDownloadService : Service() {
                     val cv = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, fName)
                         put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/OttOplayer")
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/by erdal trmn tv player")
                         put(MediaStore.Downloads.IS_PENDING, 1)
                     }
                     mediaUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
@@ -2508,7 +2509,7 @@ class StreamDownloadService : Service() {
                     out = contentResolver.openOutputStream(mediaUri)
                         ?: throw Exception("Çıktı akışı açılamadı")
                 } else {
-                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "OttOplayer").apply { mkdirs() }
+                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "by erdal trmn tv player").apply { mkdirs() }
                     fallbackFile = File(dir, fName)
                     out = FileOutputStream(fallbackFile)
                 }
@@ -2584,7 +2585,7 @@ class StreamDownloadService : Service() {
                 val doneBuilder = NotificationCompat.Builder(this@StreamDownloadService, chId)
                     .setSmallIcon(android.R.drawable.stat_sys_download_done)
                     .setContentTitle(streamTitle)
-                    .setContentText("Bitti: Download/OttOplayer/$fName ($finalMb MB)")
+                    .setContentText("Bitti: Download/by erdal trmn tv player/$fName ($finalMb MB)")
                     .setOngoing(false)
                 nm.notify(notifId + 1, doneBuilder.build())
 
