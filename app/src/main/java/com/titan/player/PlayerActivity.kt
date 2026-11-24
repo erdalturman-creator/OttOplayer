@@ -1,11 +1,14 @@
 package com.titan.player
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -17,6 +20,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.GestureDetector
@@ -24,6 +28,14 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
@@ -56,18 +68,27 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
+data class ChannelEntry(
+    val title: String,
+    val url: String
+)
+
 class PlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
     private lateinit var playerView: PlayerView
+    private lateinit var titleView: TextView
     private lateinit var topOverlay: LinearLayout
     private lateinit var centerOverlay: LinearLayout
     private lateinit var unlockButton: ImageButton
     private lateinit var gestureIndicator: TextView
     private lateinit var btnPlayPause: ImageButton
 
+    private val channels = mutableListOf<ChannelEntry>()
+    private var currentChannelIndex = 0
     private var currentStreamUrl = ""
     private var currentStreamTitle = "OttOplayer"
+
     private var isLocked = false
     private var controlsVisible = true
     private var resizeModeIndex = 0
@@ -75,25 +96,15 @@ class PlayerActivity : AppCompatActivity() {
     private var savedPlayWhenReady: Boolean = true
     private var pendingDownloadAfterPermission = false
 
-    @Volatile
-    private var isDownloading = false
-
     private val mainHandler = Handler(Looper.getMainLooper())
     private val hideRunnable = Runnable { setControlsVisibility(false) }
     private val hideGestureRunnable = Runnable { gestureIndicator.visibility = View.GONE }
-
-    private val downloadClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
             if (pendingDownloadAfterPermission) {
                 pendingDownloadAfterPermission = false
-                performDownload()
+                startBackgroundDownloadService()
             }
         }
 
@@ -102,18 +113,30 @@ class PlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        currentStreamUrl = intent.getStringExtra("STREAM_URL")?.trim().orEmpty()
-        currentStreamTitle = intent.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
+        val initialUrl = intent.getStringExtra("STREAM_URL")?.trim().orEmpty()
+        val initialTitle = intent.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
 
-        if (currentStreamUrl.isEmpty()) {
+        loadChannelsFromIntentAndPrefs(initialUrl, initialTitle)
+
+        if (channels.isEmpty() && initialUrl.isEmpty()) {
             finish()
             return
+        }
+
+        if (channels.isNotEmpty()) {
+            val active = channels[currentChannelIndex.coerceIn(0, channels.lastIndex)]
+            currentStreamUrl = active.url
+            currentStreamTitle = active.title
+        } else {
+            currentStreamUrl = initialUrl
+            currentStreamTitle = initialTitle
         }
 
         if (savedInstanceState != null) {
             savedPosition = savedInstanceState.getLong("SAVED_POSITION", 0L)
             savedPlayWhenReady = savedInstanceState.getBoolean("SAVED_PLAY_WHEN_READY", true)
             resizeModeIndex = savedInstanceState.getInt("RESIZE_MODE_INDEX", 0)
+            currentChannelIndex = savedInstanceState.getInt("CURRENT_CHANNEL_INDEX", currentChannelIndex)
         }
 
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -138,21 +161,21 @@ class PlayerActivity : AppCompatActivity() {
         }
         ViewCompat.setOnApplyWindowInsetsListener(topOverlay) { v, insets ->
             val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            v.setPadding(sys.left + 16, sys.top + 24, sys.right + 16, 16)
+            v.setPadding(sys.left + 14, sys.top + 22, sys.right + 14, 14)
             insets
         }
 
         topOverlay.addView(createIconButton(android.R.drawable.ic_media_previous) { finish() })
-        topOverlay.addView(
-            TextView(this).apply {
-                text = currentStreamTitle
-                setTextColor(Color.WHITE)
-                textSize = 15f
-                typeface = Typeface.DEFAULT_BOLD
-                maxLines = 1
-                layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(12, 0, 12, 0) }
-            }
-        )
+
+        titleView = TextView(this).apply {
+            text = currentStreamTitle
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(10, 0, 10, 0) }
+        }
+        topOverlay.addView(titleView)
 
         val iconScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val iconRow = LinearLayout(this).apply {
@@ -160,6 +183,22 @@ class PlayerActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        iconRow.addView(createIconButton(android.R.drawable.ic_media_rew) {
+            resetHideTimer()
+            switchChannel(-1)
+        })
+        iconRow.addView(createIconButton(android.R.drawable.ic_media_ff) {
+            resetHideTimer()
+            switchChannel(1)
+        })
+        iconRow.addView(createIconButton(android.R.drawable.ic_menu_agenda) {
+            resetHideTimer()
+            showChannelManagerDialog()
+        })
+        iconRow.addView(createIconButton(android.R.drawable.ic_menu_share) {
+            resetHideTimer()
+            showPlatformLoginDialog()
+        })
         iconRow.addView(createIconButton(android.R.drawable.stat_sys_download) {
             resetHideTimer()
             requestDownloadWithPermissionCheck()
@@ -205,20 +244,18 @@ class PlayerActivity : AppCompatActivity() {
         val btnRew = createCircleControlButton(android.R.drawable.ic_media_rew, 64) {
             resetHideTimer()
             seekBy(-15_000L)
+            showGestureToast("⏪ -15 sn")
         }
         btnPlayPause = createCircleControlButton(android.R.drawable.ic_media_pause, 84) {
             resetHideTimer()
             player?.let { exo ->
-                if (exo.isPlaying) {
-                    exo.pause()
-                } else {
-                    exo.play()
-                }
+                if (exo.isPlaying) exo.pause() else exo.play()
             }
         }
         val btnFf = createCircleControlButton(android.R.drawable.ic_media_ff, 64) {
             resetHideTimer()
             seekBy(15_000L)
+            showGestureToast("⏩ +15 sn")
         }
         centerOverlay.addView(btnRew)
         centerOverlay.addView(btnPlayPause)
@@ -332,6 +369,304 @@ class PlayerActivity : AppCompatActivity() {
         outState.putLong("SAVED_POSITION", pos)
         outState.putBoolean("SAVED_PLAY_WHEN_READY", playing)
         outState.putInt("RESIZE_MODE_INDEX", resizeModeIndex)
+        outState.putInt("CURRENT_CHANNEL_INDEX", currentChannelIndex)
+    }
+
+    private fun loadChannelsFromIntentAndPrefs(initialUrl: String, initialTitle: String) {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val deletedSet = prefs.getStringSet("deleted_channel_urls", emptySet())?.toSet() ?: emptySet()
+        val extraSet = prefs.getStringSet("custom_channel_entries", emptySet())?.toSet() ?: emptySet()
+
+        val rawList = mutableListOf<ChannelEntry>()
+        val titlesExtra = intent.getStringArrayListExtra("CHANNEL_TITLES")
+        val urlsExtra = intent.getStringArrayListExtra("CHANNEL_URLS")
+
+        if (titlesExtra != null && urlsExtra != null && titlesExtra.size == urlsExtra.size) {
+            for (i in urlsExtra.indices) {
+                val u = urlsExtra[i].trim()
+                val t = titlesExtra[i].trim().ifEmpty { "Kanal ${i + 1}" }
+                if (u.isNotEmpty()) rawList.add(ChannelEntry(t, u))
+            }
+        }
+
+        if (initialUrl.isNotEmpty() && rawList.none { it.url == initialUrl }) {
+            rawList.add(0, ChannelEntry(initialTitle, initialUrl))
+        }
+
+        for (item in extraSet) {
+            val parts = item.split("|||", limit = 2)
+            if (parts.size == 2 && parts[1].isNotBlank() && rawList.none { it.url == parts[1] }) {
+                rawList.add(ChannelEntry(parts[0].ifBlank { "Özel Kanal" }, parts[1]))
+            }
+        }
+
+        channels.clear()
+        channels.addAll(rawList.filter { it.url !in deletedSet })
+
+        val matchIdx = channels.indexOfFirst { it.url == currentStreamUrl || it.url == initialUrl }
+        currentChannelIndex = if (matchIdx >= 0) matchIdx else 0
+    }
+
+    private fun saveDeletedChannelUrls(urlsToAdd: Collection<String>) {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getStringSet("deleted_channel_urls", emptySet())?.toMutableSet() ?: mutableSetOf()
+        existing.addAll(urlsToAdd)
+        prefs.edit().putStringSet("deleted_channel_urls", existing).apply()
+    }
+
+    private fun saveCustomChannel(title: String, url: String) {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getStringSet("custom_channel_entries", emptySet())?.toMutableSet() ?: mutableSetOf()
+        existing.add("$title|||$url")
+        prefs.edit().putStringSet("custom_channel_entries", existing).apply()
+    }
+
+    private fun switchChannel(offset: Int) {
+        if (channels.size <= 1) {
+            Toast.makeText(this, "Geçiş yapılacak başka kanal yok", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val nextIndex = (currentChannelIndex + offset + channels.size) % channels.size
+        playChannelAt(nextIndex)
+    }
+
+    private fun playChannelAt(index: Int) {
+        if (index !in channels.indices) return
+        currentChannelIndex = index
+        val target = channels[index]
+        currentStreamUrl = target.url
+        currentStreamTitle = target.title
+        savedPosition = 0L
+        savedPlayWhenReady = true
+        titleView.text = currentStreamTitle
+        showGestureToast("📺 ${target.title}")
+        initializePlayer(currentStreamUrl, 0L, true)
+    }
+
+    private fun showChannelManagerDialog() {
+        if (channels.isEmpty()) {
+            Toast.makeText(this, "Kanal listesi boş", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = channels.mapIndexed { idx, ch ->
+            val activeMark = if (idx == currentChannelIndex) " ▶" else ""
+            "${idx + 1}. ${ch.title}$activeMark"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Hızlı Kanal Geçişi & Silme")
+            .setItems(labels) { _, which ->
+                playChannelAt(which)
+            }
+            .setNeutralButton("Toplu Sil") { _, _ ->
+                showBulkDeleteChannelsDialog()
+            }
+            .setNegativeButton("Tekli Sil") { _, _ ->
+                showSingleDeleteChannelDialog()
+            }
+            .setPositiveButton("Kapat", null)
+            .show()
+    }
+
+    private fun showSingleDeleteChannelDialog() {
+        if (channels.isEmpty()) return
+        val labels = channels.mapIndexed { idx, ch -> "${idx + 1}. ${ch.title}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Silinecek Kanalı Seçin")
+            .setItems(labels) { _, which ->
+                val removed = channels.removeAt(which)
+                saveDeletedChannelUrls(listOf(removed.url))
+                Toast.makeText(this, "Silindi: ${removed.title}", Toast.LENGTH_SHORT).show()
+                if (channels.isEmpty()) {
+                    finish()
+                } else {
+                    playChannelAt(which.coerceIn(0, channels.lastIndex))
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun showBulkDeleteChannelsDialog() {
+        if (channels.isEmpty()) return
+        val labels = channels.mapIndexed { idx, ch -> "${idx + 1}. ${ch.title}" }.toTypedArray()
+        val checked = BooleanArray(channels.size) { false }
+
+        AlertDialog.Builder(this)
+            .setTitle("Toplu Silinecek Kanallar")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("Seçilenleri Sil") { _, _ ->
+                val toRemove = channels.indices.filter { checked[it] }.map { channels[it] }
+                if (toRemove.isEmpty()) {
+                    Toast.makeText(this, "Kanal seçilmedi", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val removedUrls = toRemove.map { it.url }
+                val currentRemoved = channels.getOrNull(currentChannelIndex)?.url in removedUrls
+                channels.removeAll { it.url in removedUrls }
+                saveDeletedChannelUrls(removedUrls)
+                Toast.makeText(this, "${toRemove.size} kanal silindi", Toast.LENGTH_SHORT).show()
+                if (channels.isEmpty()) {
+                    finish()
+                } else if (currentRemoved) {
+                    playChannelAt(0)
+                } else {
+                    val idx = channels.indexOfFirst { it.url == currentStreamUrl }
+                    if (idx >= 0) currentChannelIndex = idx
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun showPlatformLoginDialog() {
+        val platforms = listOf(
+            "Netflix" to "https://www.netflix.com/tr/login",
+            "Amazon Prime Video" to "https://www.primevideo.com",
+            "Disney+" to "https://www.disneyplus.com/login",
+            "YouTube" to "https://m.youtube.com",
+            "Özel Web / Portal Girişi" to ""
+        )
+        val names = platforms.map { it.first }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Platform Girişleri")
+            .setItems(names) { _, which ->
+                val (pName, pUrl) = platforms[which]
+                if (pUrl.isNotEmpty()) {
+                    openPlatformWebView(pName, pUrl)
+                } else {
+                    showCustomUrlLoginDialog()
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun showCustomUrlLoginDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 12)
+        }
+        val titleInput = EditText(this).apply {
+            hint = "Platform / Kanal Adı (örn. Özel Yayın)"
+            setTextColor(Color.BLACK)
+        }
+        val urlInput = EditText(this).apply {
+            hint = "https://... veya yayın URL (.m3u8 / .mp4)"
+            setTextColor(Color.BLACK)
+        }
+        container.addView(titleInput)
+        container.addView(urlInput)
+
+        AlertDialog.Builder(this)
+            .setTitle("Özel Giriş veya Yayın Ekle")
+            .setView(container)
+            .setPositiveButton("Aç / Kaydet") { _, _ ->
+                val customTitle = titleInput.text.toString().trim().ifEmpty { "Özel Platform" }
+                val raw = urlInput.text.toString().trim()
+                if (raw.isEmpty()) {
+                    Toast.makeText(this, "Adres boş olamaz", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val normalized = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
+                val lower = normalized.lowercase()
+                if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mkv") || lower.contains(".ts")) {
+                    saveCustomChannel(customTitle, normalized)
+                    channels.add(ChannelEntry(customTitle, normalized))
+                    playChannelAt(channels.lastIndex)
+                } else {
+                    openPlatformWebView(customTitle, normalized)
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun openPlatformWebView(platformName: String, startUrl: String) {
+        val webContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+        }
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#FF111827"))
+            setPadding(16, 16, 16, 16)
+        }
+        val tvTitle = TextView(this).apply {
+            text = "$platformName Giriş"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        val btnPlayCurrent = Button(this).apply {
+            text = "Yayını Oynat"
+            textSize = 12f
+        }
+        val btnClose = Button(this).apply {
+            text = "Kapat"
+            textSize = 12f
+        }
+        topBar.addView(tvTitle)
+        topBar.addView(btnPlayCurrent)
+        topBar.addView(btnClose)
+
+        val webView = WebView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.userAgentString = WebSettings.getDefaultUserAgent(this@PlayerActivity)
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            webChromeClient = WebChromeClient()
+        }
+
+        var dialogRef: AlertDialog? = null
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val targetUrl = request?.url?.toString().orEmpty()
+                val lower = targetUrl.lowercase()
+                if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mkv")) {
+                    saveCustomChannel(platformName, targetUrl)
+                    channels.add(ChannelEntry(platformName, targetUrl))
+                    dialogRef?.dismiss()
+                    playChannelAt(channels.lastIndex)
+                    return true
+                }
+                return false
+            }
+        }
+
+        btnPlayCurrent.setOnClickListener {
+            val activeUrl = webView.url?.trim().orEmpty()
+            if (activeUrl.isNotEmpty()) {
+                saveCustomChannel(platformName, activeUrl)
+                channels.add(ChannelEntry(platformName, activeUrl))
+                dialogRef?.dismiss()
+                playChannelAt(channels.lastIndex)
+            }
+        }
+        btnClose.setOnClickListener { dialogRef?.dismiss() }
+
+        webContainer.addView(topBar)
+        webContainer.addView(webView)
+        webView.loadUrl(startUrl)
+
+        dialogRef = AlertDialog.Builder(this)
+            .setView(webContainer)
+            .setOnDismissListener {
+                webView.stopLoading()
+                webView.destroy()
+            }
+            .create()
+        dialogRef.show()
     }
 
     private fun seekBy(deltaMs: Long) {
@@ -343,12 +678,12 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun createIconButton(iconRes: Int, onClick: () -> Unit): ImageButton {
-        val sz = (48 * resources.displayMetrics.density).toInt()
+        val sz = (46 * resources.displayMetrics.density).toInt()
         return ImageButton(this).apply {
             setImageResource(iconRes)
             setColorFilter(Color.WHITE)
             setBackgroundColor(Color.parseColor("#44FFFFFF"))
-            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { setMargins(8, 0, 8, 0) }
+            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { setMargins(6, 0, 6, 0) }
             setOnClickListener { onClick() }
         }
     }
@@ -386,10 +721,6 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun requestDownloadWithPermissionCheck() {
         if (currentStreamUrl.isEmpty()) return
-        if (isDownloading) {
-            Toast.makeText(this, "Zaten devam eden bir indirme var", Toast.LENGTH_SHORT).show()
-            return
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
@@ -398,193 +729,21 @@ class PlayerActivity : AppCompatActivity() {
                 return
             }
         }
-        performDownload()
+        startBackgroundDownloadService()
     }
 
-    private fun performDownload() {
-        if (currentStreamUrl.isEmpty() || isDownloading) return
-        isDownloading = true
-        Toast.makeText(this, "İndirme başlatıldı", Toast.LENGTH_LONG).show()
-
-        val chId = "ottoplayer_dl"
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private fun startBackgroundDownloadService() {
+        if (currentStreamUrl.isEmpty()) return
+        val svcIntent = Intent(this, StreamDownloadService::class.java).apply {
+            putExtra("STREAM_URL", currentStreamUrl)
+            putExtra("STREAM_TITLE", currentStreamTitle)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm.createNotificationChannel(
-                NotificationChannel(chId, "İndirmeler", NotificationManager.IMPORTANCE_LOW)
-            )
+            startForegroundService(svcIntent)
+        } else {
+            startService(svcIntent)
         }
-        val notifId = ((System.currentTimeMillis() % 900_000) + 1000).toInt()
-        val builder = NotificationCompat.Builder(this, chId)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(currentStreamTitle)
-            .setContentText("Bağlanıyor...")
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-        nm.notify(notifId, builder.build())
-
-        Thread {
-            var out: OutputStream? = null
-            var mediaUri: Uri? = null
-            var fallbackFile: File? = null
-            try {
-                val lowerUrl = currentStreamUrl.lowercase()
-                val isHls = lowerUrl.contains(".m3u8")
-                val ext = when {
-                    isHls -> ".ts"
-                    lowerUrl.contains(".mkv") -> ".mkv"
-                    lowerUrl.contains(".mp4") -> ".mp4"
-                    else -> ".ts"
-                }
-                val mimeType = when (ext) {
-                    ".mp4" -> "video/mp4"
-                    ".mkv" -> "video/x-matroska"
-                    else -> "video/mp2t"
-                }
-                val safeTitle = currentStreamTitle
-                    .replace(Regex("[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ _-]"), "")
-                    .trim()
-                    .ifEmpty { "Video" }
-                val fName = "${safeTitle}_$notifId$ext"
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val cv = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, fName)
-                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/OttOplayer")
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    mediaUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
-                        ?: throw Exception("MediaStore kaydı oluşturulamadı")
-                    out = contentResolver.openOutputStream(mediaUri)
-                        ?: throw Exception("Çıktı akışı açılamadı")
-                } else {
-                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "OttOplayer").apply { mkdirs() }
-                    fallbackFile = File(dir, fName)
-                    out = FileOutputStream(fallbackFile)
-                }
-
-                var totalBytesWritten = 0L
-                var lastNotifTime = 0L
-
-                if (isHls) {
-                    val segmentUrls = resolveHlsSegments(currentStreamUrl)
-                    if (segmentUrls.isEmpty()) throw Exception("HLS segmenti bulunamadı")
-
-                    segmentUrls.forEachIndexed { index, segUrl ->
-                        val req = Request.Builder().url(segUrl).header("User-Agent", "VLC/3.0.18").build()
-                        downloadClient.newCall(req).execute().use { segRes ->
-                            if (!segRes.isSuccessful) throw Exception("Segment HTTP ${segRes.code}")
-                            val body = segRes.body ?: throw Exception("Boş segment")
-                            body.byteStream().use { inp ->
-                                val buf = ByteArray(64 * 1024)
-                                var r: Int
-                                while (inp.read(buf).also { r = it } != -1) {
-                                    out?.write(buf, 0, r)
-                                    totalBytesWritten += r
-                                }
-                            }
-                        }
-                        val now = System.currentTimeMillis()
-                        if (now - lastNotifTime > 1000 || index == segmentUrls.lastIndex) {
-                            lastNotifTime = now
-                            val mb = totalBytesWritten / (1024 * 1024)
-                            builder.setContentText("HLS İndiriliyor (${index + 1}/${segmentUrls.size}) - $mb MB")
-                            nm.notify(notifId, builder.build())
-                        }
-                    }
-                } else {
-                    val req = Request.Builder().url(currentStreamUrl).header("User-Agent", "VLC/3.0.18").build()
-                    downloadClient.newCall(req).execute().use { res ->
-                        if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
-                        val body = res.body ?: throw Exception("Boş yanıt")
-                        val total = body.contentLength()
-                        body.byteStream().use { inp ->
-                            val buf = ByteArray(64 * 1024)
-                            var r: Int
-                            while (inp.read(buf).also { r = it } != -1) {
-                                out?.write(buf, 0, r)
-                                totalBytesWritten += r
-                                val now = System.currentTimeMillis()
-                                if (now - lastNotifTime > 1000) {
-                                    lastNotifTime = now
-                                    val mb = totalBytesWritten / (1024 * 1024)
-                                    val text = if (total > 0) {
-                                        "İndiriliyor: $mb MB / ${total / (1024 * 1024)} MB (%${(totalBytesWritten * 100 / total).toInt()})"
-                                    } else {
-                                        "İndiriliyor: $mb MB..."
-                                    }
-                                    builder.setContentText(text)
-                                    nm.notify(notifId, builder.build())
-                                }
-                            }
-                        }
-                    }
-                }
-
-                out?.flush()
-                out?.close()
-                out = null
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
-                    val doneValues = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-                    contentResolver.update(mediaUri, doneValues, null, null)
-                }
-
-                val finalMb = totalBytesWritten / (1024 * 1024)
-                builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
-                    .setContentText("Bitti: Download/OttOplayer/$fName ($finalMb MB)")
-                    .setOngoing(false)
-                nm.notify(notifId, builder.build())
-
-                mainHandler.post {
-                    Toast.makeText(this, "İndirme tamamlandı: $fName", Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                try { out?.close() } catch (_: Exception) {}
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
-                    try { contentResolver.delete(mediaUri, null, null) } catch (_: Exception) {}
-                } else {
-                    fallbackFile?.delete()
-                }
-                builder.setSmallIcon(android.R.drawable.stat_notify_error)
-                    .setContentText("Hata: ${e.message ?: "Bilinmeyen hata"}")
-                    .setOngoing(false)
-                nm.notify(notifId, builder.build())
-                mainHandler.post {
-                    Toast.makeText(this, "İndirme hatası: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                isDownloading = false
-            }
-        }.start()
-    }
-
-    private fun resolveHlsSegments(playlistUrl: String): List<String> {
-        val req = Request.Builder().url(playlistUrl).header("User-Agent", "VLC/3.0.18").build()
-        val content = downloadClient.newCall(req).execute().use { res ->
-            if (!res.isSuccessful) throw Exception("Manifest HTTP ${res.code}")
-            res.body?.string() ?: throw Exception("Boş manifest")
-        }
-
-        val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val base = URL(playlistUrl)
-
-        val variantUrls = mutableListOf<String>()
-        val segmentUrls = mutableListOf<String>()
-
-        for (line in lines) {
-            if (line.startsWith("#")) continue
-            val resolved: String = URL(base, line).toString()
-            if (resolved.lowercase().contains(".m3u8")) {
-                variantUrls.add(resolved)
-            } else {
-                segmentUrls.add(resolved)
-            }
-        }
-
-        if (segmentUrls.isNotEmpty()) return segmentUrls
-        if (variantUrls.isNotEmpty()) return resolveHlsSegments(variantUrls.first())
-        return emptyList()
+        Toast.makeText(this, "İndirme arka planda başlatıldı", Toast.LENGTH_LONG).show()
     }
 
     @OptIn(UnstableApi::class)
@@ -592,6 +751,7 @@ class PlayerActivity : AppCompatActivity() {
         player?.release()
         val renderersFactory = DefaultRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            .setEnableDecoderFallback(true)
 
         player = ExoPlayer.Builder(this, renderersFactory).build().also { exo ->
             playerView.player = exo
@@ -643,8 +803,11 @@ class PlayerActivity : AppCompatActivity() {
                         val f = g.getTrackFormat(i)
                         val label = f.label ?: "Parça ${i + 1}"
                         val lang = f.language ?: "Dil"
+                        val codec = f.sampleMimeType?.substringAfter("/")?.uppercase() ?: ""
+                        val chInfo = if (trackType == C.TRACK_TYPE_AUDIO && f.channelCount > 0) " · ${f.channelCount}ch" else ""
+                        val codecInfo = if (codec.isNotEmpty()) " [$codec$chInfo]" else ""
                         val selectedMark = if (g.isTrackSelected(i)) " ✓" else ""
-                        opts.add("$label ($lang)$selectedMark")
+                        opts.add("$label ($lang)$codecInfo$selectedMark")
                         acts.add {
                             exo.trackSelectionParameters = exo.trackSelectionParameters
                                 .buildUpon()
@@ -664,7 +827,7 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle(if (trackType == C.TRACK_TYPE_AUDIO) "Ses Seçimi" else "Altyazı Seçimi")
+            .setTitle(if (trackType == C.TRACK_TYPE_AUDIO) "Çoklu Ses Seçimi" else "Altyazı Seçimi")
             .setItems(opts.toTypedArray()) { _, w -> acts[w]() }
             .setNegativeButton("Kapat", null)
             .show()
@@ -673,6 +836,237 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(null)
+    }
+}
+
+class StreamDownloadService : Service() {
+
+    private val downloadClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var activeWorkers = 0
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val streamUrl = intent?.getStringExtra("STREAM_URL")?.trim().orEmpty()
+        val streamTitle = intent?.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
+
+        if (streamUrl.isEmpty()) {
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
+
+        val chId = "ottoplayer_bg_dl"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(chId, "Arka Plan İndirmeleri", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+
+        val notifId = ((System.currentTimeMillis() % 800_000) + 2000).toInt()
+        val builder = NotificationCompat.Builder(this, chId)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(streamTitle)
+            .setContentText("Arka planda bağlanıyor...")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+
+        startForeground(notifId, builder.build())
+
+        synchronized(this) { activeWorkers++ }
+
+        Thread {
+            var out: OutputStream? = null
+            var mediaUri: Uri? = null
+            var fallbackFile: File? = null
+            try {
+                val lowerUrl = streamUrl.lowercase()
+                val isHls = lowerUrl.contains(".m3u8")
+                val ext = when {
+                    isHls -> ".ts"
+                    lowerUrl.contains(".mkv") -> ".mkv"
+                    lowerUrl.contains(".mp4") -> ".mp4"
+                    else -> ".ts"
+                }
+                val mimeType = when (ext) {
+                    ".mp4" -> "video/mp4"
+                    ".mkv" -> "video/x-matroska"
+                    else -> "video/mp2t"
+                }
+                val safeTitle = streamTitle
+                    .replace(Regex("[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ _-]"), "")
+                    .trim()
+                    .ifEmpty { "Video" }
+                val fName = "${safeTitle}_$notifId$ext"
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val cv = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, fName)
+                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/OttOplayer")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    mediaUri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                        ?: throw Exception("MediaStore kaydı oluşturulamadı")
+                    out = contentResolver.openOutputStream(mediaUri)
+                        ?: throw Exception("Çıktı akışı açılamadı")
+                } else {
+                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "OttOplayer").apply { mkdirs() }
+                    fallbackFile = File(dir, fName)
+                    out = FileOutputStream(fallbackFile)
+                }
+
+                var totalBytesWritten = 0L
+                var lastNotifTime = 0L
+
+                if (isHls) {
+                    val segmentUrls = resolveHlsSegments(streamUrl)
+                    if (segmentUrls.isEmpty()) throw Exception("HLS segmenti bulunamadı")
+
+                    segmentUrls.forEachIndexed { index, segUrl ->
+                        val req = Request.Builder().url(segUrl).header("User-Agent", "VLC/3.0.18").build()
+                        downloadClient.newCall(req).execute().use { segRes ->
+                            if (!segRes.isSuccessful) throw Exception("Segment HTTP ${segRes.code}")
+                            val body = segRes.body ?: throw Exception("Boş segment")
+                            body.byteStream().use { inp ->
+                                val buf = ByteArray(64 * 1024)
+                                var r: Int
+                                while (inp.read(buf).also { r = it } != -1) {
+                                    out?.write(buf, 0, r)
+                                    totalBytesWritten += r
+                                }
+                            }
+                        }
+                        val now = System.currentTimeMillis()
+                        if (now - lastNotifTime > 1000 || index == segmentUrls.lastIndex) {
+                            lastNotifTime = now
+                            val mb = totalBytesWritten / (1024 * 1024)
+                            builder.setContentText("HLS İndiriliyor (${index + 1}/${segmentUrls.size}) - $mb MB")
+                            nm.notify(notifId, builder.build())
+                        }
+                    }
+                } else {
+                    val req = Request.Builder().url(streamUrl).header("User-Agent", "VLC/3.0.18").build()
+                    downloadClient.newCall(req).execute().use { res ->
+                        if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
+                        val body = res.body ?: throw Exception("Boş yanıt")
+                        val total = body.contentLength()
+                        body.byteStream().use { inp ->
+                            val buf = ByteArray(64 * 1024)
+                            var r: Int
+                            while (inp.read(buf).also { r = it } != -1) {
+                                out?.write(buf, 0, r)
+                                totalBytesWritten += r
+                                val now = System.currentTimeMillis()
+                                if (now - lastNotifTime > 1000) {
+                                    lastNotifTime = now
+                                    val mb = totalBytesWritten / (1024 * 1024)
+                                    val text = if (total > 0) {
+                                        "İndiriliyor: $mb MB / ${total / (1024 * 1024)} MB (%${(totalBytesWritten * 100 / total).toInt()})"
+                                    } else {
+                                        "İndiriliyor: $mb MB..."
+                                    }
+                                    builder.setContentText(text)
+                                    nm.notify(notifId, builder.build())
+                                }
+                            }
+                        }
+                    }
+                }
+
+                out?.flush()
+                out?.close()
+                out = null
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
+                    val doneValues = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                    contentResolver.update(mediaUri, doneValues, null, null)
+                }
+
+                val finalMb = totalBytesWritten / (1024 * 1024)
+                val doneBuilder = NotificationCompat.Builder(this@StreamDownloadService, chId)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentTitle(streamTitle)
+                    .setContentText("Bitti: Download/OttOplayer/$fName ($finalMb MB)")
+                    .setOngoing(false)
+                nm.notify(notifId + 1, doneBuilder.build())
+
+                mainHandler.post {
+                    Toast.makeText(applicationContext, "İndirme tamamlandı: $fName", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                try { out?.close() } catch (_: Exception) {}
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri != null) {
+                    try { contentResolver.delete(mediaUri, null, null) } catch (_: Exception) {}
+                } else {
+                    fallbackFile?.delete()
+                }
+                val errBuilder = NotificationCompat.Builder(this@StreamDownloadService, chId)
+                    .setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setContentTitle(streamTitle)
+                    .setContentText("Hata: ${e.message ?: "Bilinmeyen hata"}")
+                    .setOngoing(false)
+                nm.notify(notifId + 1, errBuilder.build())
+                mainHandler.post {
+                    Toast.makeText(applicationContext, "İndirme hatası: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                synchronized(this@StreamDownloadService) { activeWorkers-- }
+                stopIfIdle()
+            }
+        }.start()
+
+        return START_NOT_STICKY
+    }
+
+    private fun stopIfIdle() {
+        synchronized(this) {
+            if (activeWorkers <= 0) {
+                activeWorkers = 0
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf()
+            }
+        }
+    }
+
+    private fun resolveHlsSegments(playlistUrl: String): List<String> {
+        val req = Request.Builder().url(playlistUrl).header("User-Agent", "VLC/3.0.18").build()
+        val content = downloadClient.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) throw Exception("Manifest HTTP ${res.code}")
+            res.body?.string() ?: throw Exception("Boş manifest")
+        }
+
+        val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val base = URL(playlistUrl)
+
+        val variantUrls = mutableListOf<String>()
+        val segmentUrls = mutableListOf<String>()
+
+        for (line in lines) {
+            if (line.startsWith("#")) continue
+            val resolved: String = URL(base, line).toString()
+            if (resolved.lowercase().contains(".m3u8")) {
+                variantUrls.add(resolved)
+            } else {
+                segmentUrls.add(resolved)
+            }
+        }
+
+        if (segmentUrls.isNotEmpty()) return segmentUrls
+        if (variantUrls.isNotEmpty()) return resolveHlsSegments(variantUrls.first())
+        return emptyList()
     }
 }
 // SON
