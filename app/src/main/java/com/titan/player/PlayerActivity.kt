@@ -14,7 +14,6 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -108,9 +107,6 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var titleView: TextView
     private lateinit var topOverlay: LinearLayout
     private lateinit var centerOverlay: LinearLayout
-    private lateinit var bottomHudOverlay: LinearLayout
-    private lateinit var bottomChannelNumberView: TextView
-    private lateinit var bottomChannelNameView: TextView
     private lateinit var unlockButton: ImageButton
     private lateinit var gestureIndicator: TextView
     private lateinit var btnPlayPause: ImageButton
@@ -206,9 +202,9 @@ class PlayerActivity : AppCompatActivity() {
         topOverlay.addView(createIconButton(android.R.drawable.ic_media_previous) { finish() })
 
         titleView = TextView(this).apply {
-            text = currentStreamTitle
+            text = formatHeaderTitle()
             setTextColor(Color.WHITE)
-            textSize = 15f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(8, 0, 8, 0) }
@@ -223,7 +219,7 @@ class PlayerActivity : AppCompatActivity() {
 
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_compass) {
             resetHideTimer()
-            showInitialCategoryHubDialog()
+            showCategoryHubDialog()
         })
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_info_details) {
             resetHideTimer()
@@ -262,6 +258,10 @@ class PlayerActivity : AppCompatActivity() {
             resizeModeIndex = (resizeModeIndex + 1) % resizeModes.size
             playerView.resizeMode = resizeModes[resizeModeIndex].first
             showGestureToast("Ekran: ${resizeModes[resizeModeIndex].second}")
+        })
+        iconRow.addView(createIconButton(android.R.drawable.ic_menu_preferences) {
+            resetHideTimer()
+            showSettingsMenuDialog()
         })
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_always_landscape_portrait) {
             resetHideTimer()
@@ -307,95 +307,6 @@ class PlayerActivity : AppCompatActivity() {
         centerOverlay.addView(btnPlayPause)
         centerOverlay.addView(btnFf)
         root.addView(centerOverlay)
-
-        bottomHudOverlay = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#B3000000"))
-            layoutParams = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
-        }
-        ViewCompat.setOnApplyWindowInsetsListener(bottomHudOverlay) { v, insets ->
-            val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            v.setPadding(sys.left + 16, 12, sys.right + 16, sys.bottom + 14)
-            insets
-        }
-
-        val badgeBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#33FFFFFF"))
-            setPadding(20, 12, 20, 12)
-            layoutParams = LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, 0, 14, 0) }
-        }
-        val badgeLabel = TextView(this).apply {
-            text = "by erdal trmn tv player"
-            setTextColor(Color.WHITE)
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-        }
-        badgeBox.addView(badgeLabel)
-        bottomHudOverlay.addView(badgeBox)
-
-        val metaCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-        }
-        bottomChannelNumberView = TextView(this).apply {
-            text = (currentItemMeta?.number ?: (currentChannelIndex + 1)).toString()
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-        }
-        bottomChannelNameView = TextView(this).apply {
-            text = currentStreamTitle
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            maxLines = 1
-        }
-        metaCol.addView(bottomChannelNumberView)
-        metaCol.addView(bottomChannelNameView)
-        bottomHudOverlay.addView(metaCol)
-
-        val quickActionsScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(-2, -2)
-        }
-        val quickActionsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        quickActionsRow.addView(createHudPillButton("≡") {
-            resetHideTimer()
-            showChannelManagerDialog()
-        })
-        quickActionsRow.addView(createHudPillButton("▤") {
-            resetHideTimer()
-            showVideoAndAudioSelectorDialog(initialTabAudio = false)
-        })
-        quickActionsRow.addView(createHudPillButton("💬") {
-            resetHideTimer()
-            showSubtitleTrackDialog()
-        })
-        quickActionsRow.addView(createHudPillButton("1:1") {
-            resetHideTimer()
-            resizeModeIndex = (resizeModeIndex + 1) % resizeModes.size
-            playerView.resizeMode = resizeModes[resizeModeIndex].first
-            showGestureToast("Ekran: ${resizeModes[resizeModeIndex].second}")
-        })
-        quickActionsRow.addView(createHudPillButton("🔊") {
-            resetHideTimer()
-            showVideoAndAudioSelectorDialog(initialTabAudio = true)
-        })
-        quickActionsRow.addView(createHudPillButton("🔖") {
-            resetHideTimer()
-            toggleFavoriteForCurrentItem()
-        })
-
-        quickActionsScroll.addView(quickActionsRow)
-        bottomHudOverlay.addView(quickActionsScroll)
-        root.addView(bottomHudOverlay)
 
         unlockButton = createIconButton(android.R.drawable.ic_lock_lock) {
             isLocked = false
@@ -475,12 +386,8 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         setContentView(root)
-        updateHudLabels()
+        updateHeaderTitle()
         resetHideTimer()
-
-        if (savedInstanceState == null) {
-            mainHandler.post { showInitialCategoryHubDialog() }
-        }
     }
 
     override fun onStart() {
@@ -512,6 +419,16 @@ class PlayerActivity : AppCompatActivity() {
         outState.putInt("CURRENT_CHANNEL_INDEX", currentChannelIndex)
     }
 
+    private fun formatHeaderTitle(): String {
+        val current = activeItems.getOrNull(currentChannelIndex)
+        val numPrefix = current?.let { "${it.number} · " } ?: ""
+        return "$numPrefix$currentStreamTitle"
+    }
+
+    private fun updateHeaderTitle() {
+        titleView.text = formatHeaderTitle()
+    }
+
     private fun loadAccountsAndFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val savedAccounts = prefs.getStringSet("account_profiles", setOf("Varsayılan Hesap")) ?: setOf("Varsayılan Hesap")
@@ -520,48 +437,67 @@ class PlayerActivity : AppCompatActivity() {
         activeAccount = prefs.getString("active_account", accountProfiles.first()).orEmpty().ifBlank { accountProfiles.first() }
 
         val deletedSet = prefs.getStringSet("deleted_channel_urls", emptySet())?.toSet() ?: emptySet()
+        val deletedIds = prefs.getStringSet("deleted_item_ids", emptySet())?.toSet() ?: emptySet()
         val deletedCategories = prefs.getStringSet("deleted_category_keys", emptySet())?.toSet() ?: emptySet()
-        val extraSet = prefs.getStringSet("custom_channel_entries", emptySet())?.toSet() ?: emptySet()
+        val extraSet = prefs.getStringSet("custom_channel_entries", emptySet())?.toMutableSet() ?: mutableSetOf()
         favoriteUrls.clear()
         favoriteUrls.addAll(prefs.getStringSet("favorite_urls", emptySet()) ?: emptySet())
 
         val rawList = mutableListOf<MediaCatalogItem>()
-        val titlesExtra = intent.getStringArrayListExtra("CHANNEL_TITLES")
-        val urlsExtra = intent.getStringArrayListExtra("CHANNEL_URLS")
 
-        if (titlesExtra != null && urlsExtra != null && titlesExtra.size == urlsExtra.size) {
-            for (i in urlsExtra.indices) {
-                val u = urlsExtra[i].trim()
-                val t = titlesExtra[i].trim().ifEmpty { "Kanal ${i + 1}" }
-                if (u.isNotEmpty()) {
-                    rawList.add(
-                        MediaCatalogItem(
-                            id = "intent_$i",
-                            number = 429 + i,
-                            title = t,
-                            streamUrl = u,
-                            section = MediaHubSection.LIVE_TV,
-                            category = "TR BEIN SPORT",
-                            addedOrder = i
-                        )
-                    )
+        val possibleTitleKeys = listOf("CHANNEL_TITLES", "STREAM_TITLES", "TITLES", "NAMES")
+        val possibleUrlKeys = listOf("CHANNEL_URLS", "STREAM_URLS", "URLS", "LINKS")
+        var importedFromExtras = false
+
+        for (tKey in possibleTitleKeys) {
+            for (uKey in possibleUrlKeys) {
+                val tList = intent.getStringArrayListExtra(tKey)
+                val uList = intent.getStringArrayListExtra(uKey)
+                if (tList != null && uList != null && tList.size == uList.size && uList.isNotEmpty()) {
+                    for (i in uList.indices) {
+                        val u = uList[i].trim()
+                        val t = tList[i].trim().ifEmpty { "Kanal ${i + 1}" }
+                        if (u.isNotEmpty() && rawList.none { it.streamUrl == u }) {
+                            rawList.add(
+                                MediaCatalogItem(
+                                    id = "intent_$i",
+                                    number = 400 + i,
+                                    title = t,
+                                    streamUrl = u,
+                                    section = MediaHubSection.LIVE_TV,
+                                    category = "CANLI TV",
+                                    addedOrder = i
+                                )
+                            )
+                        }
+                    }
+                    importedFromExtras = true
+                    break
                 }
             }
+            if (importedFromExtras) break
         }
 
-        if (initialUrl.isNotEmpty() && rawList.none { it.streamUrl == initialUrl }) {
-            rawList.add(
-                0,
-                MediaCatalogItem(
-                    id = "initial_0",
-                    number = 430,
-                    title = initialTitle,
-                    streamUrl = initialUrl,
-                    section = MediaHubSection.LIVE_TV,
-                    category = "TR BEIN SPORT",
-                    addedOrder = 0
+        if (initialUrl.isNotEmpty()) {
+            val entry = "$initialTitle|||$initialUrl"
+            if (!extraSet.contains(entry) && initialUrl !in deletedSet) {
+                extraSet.add(entry)
+                prefs.edit().putStringSet("custom_channel_entries", extraSet).apply()
+            }
+            if (rawList.none { it.streamUrl == initialUrl }) {
+                rawList.add(
+                    0,
+                    MediaCatalogItem(
+                        id = "initial_0",
+                        number = 430,
+                        title = initialTitle,
+                        streamUrl = initialUrl,
+                        section = MediaHubSection.LIVE_TV,
+                        category = "CANLI TV",
+                        addedOrder = 0
+                    )
                 )
-            )
+            }
         }
 
         var extraCounter = rawList.size + 1
@@ -570,12 +506,12 @@ class PlayerActivity : AppCompatActivity() {
             if (parts.size == 2 && parts[1].isNotBlank() && rawList.none { it.streamUrl == parts[1] }) {
                 rawList.add(
                     MediaCatalogItem(
-                        id = "custom_$extraCounter",
-                        number = 500 + extraCounter,
-                        title = parts[0].ifBlank { "Özel İçerik" },
+                        id = "saved_$extraCounter",
+                        number = 430 + extraCounter,
+                        title = parts[0].ifBlank { "Kanal $extraCounter" },
                         streamUrl = parts[1],
                         section = MediaHubSection.LIVE_TV,
-                        category = "ÖZEL",
+                        category = "CANLI TV",
                         addedOrder = extraCounter
                     )
                 )
@@ -583,8 +519,11 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
 
-        if (rawList.isEmpty() && initialUrl.isEmpty()) {
-            rawList.addAll(sampleCatalogItems())
+        val fallbackUrl = initialUrl.ifEmpty { rawList.firstOrNull()?.streamUrl.orEmpty() }
+        for (sample in sampleCatalogItems(fallbackUrl)) {
+            if (rawList.none { it.id == sample.id }) {
+                rawList.add(sample)
+            }
         }
 
         allItems.clear()
@@ -594,112 +533,116 @@ class PlayerActivity : AppCompatActivity() {
         activeItems.addAll(
             rawList.filter { item ->
                 val catKey = "${item.section.name}::${item.category.uppercase(Locale.getDefault())}"
-                item.streamUrl !in deletedSet && catKey !in deletedCategories
+                val urlBlocked = item.streamUrl != fallbackUrl && item.streamUrl in deletedSet
+                item.id !in deletedIds && !urlBlocked && catKey !in deletedCategories
             }
         )
 
-        val matchIdx = activeItems.indexOfFirst { it.streamUrl == currentStreamUrl || it.streamUrl == initialUrl }
+        val matchIdx = activeItems.indexOfFirst {
+            (initialUrl.isNotEmpty() && it.streamUrl == initialUrl && it.title == initialTitle) ||
+                (initialUrl.isNotEmpty() && it.streamUrl == initialUrl)
+        }
         currentChannelIndex = if (matchIdx >= 0) matchIdx else 0
     }
 
-    private fun sampleCatalogItems(): List<MediaCatalogItem> = listOf(
+    private fun sampleCatalogItems(fallbackUrl: String): List<MediaCatalogItem> = listOf(
         MediaCatalogItem(
             id = "ch_429",
             number = 429,
             title = "TR: BEIN SPORTS SD KOTA DOSTU",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR BEIN SPORT",
             genre = "Canlı Spor",
             durationText = "Canlı",
             rating = "9.0",
             plot = "Canlı spor yayını — SD düşük veri modu.",
-            addedOrder = 1
+            addedOrder = 101
         ),
         MediaCatalogItem(
             id = "ch_430",
             number = 430,
             title = "TR: BEIN SPORTS 1 HD",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR BEIN SPORT",
             genre = "Canlı Spor",
             durationText = "Canlı",
             rating = "9.5",
             plot = "Canlı HD spor karşılaşmaları ve stüdyo yayınları.",
-            addedOrder = 2
+            addedOrder = 102
         ),
         MediaCatalogItem(
             id = "ch_431",
             number = 431,
             title = "TR: BEIN SPORTS 1 HEVC",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR BEIN SPORT",
             genre = "Canlı Spor",
             durationText = "Canlı",
             rating = "9.4",
             plot = "Yüksek verimli HEVC canlı spor akışı.",
-            addedOrder = 3
+            addedOrder = 103
         ),
         MediaCatalogItem(
             id = "ch_doc_1",
             number = 201,
             title = "TR: NATIONAL GEOGRAPHIC HD",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR BELGESEL",
             genre = "Belgesel",
             durationText = "Canlı",
             rating = "8.8",
             plot = "Doğa, bilim ve keşif belgeselleri.",
-            addedOrder = 4
+            addedOrder = 104
         ),
         MediaCatalogItem(
             id = "ch_kid_1",
             number = 301,
             title = "TR: MINIKA COCUK",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR COCUK",
             genre = "Çocuk",
             durationText = "Canlı",
             rating = "8.6",
             plot = "Çocuk ve aile yayınları.",
-            addedOrder = 5
+            addedOrder = 105
         ),
         MediaCatalogItem(
             id = "ch_tabii_1",
             number = 450,
             title = "TR: TABII SPOR 1",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR TABII SPOR",
             genre = "Canlı Spor",
             durationText = "Canlı",
             rating = "8.9",
             plot = "Canlı lig ve turnuva yayınları.",
-            addedOrder = 6
+            addedOrder = 106
         ),
         MediaCatalogItem(
             id = "ch_ssport_1",
             number = 460,
             title = "TR: S SPORT HD",
-            streamUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
             section = MediaHubSection.LIVE_TV,
             category = "TR S SPORT",
             genre = "Canlı Spor",
             durationText = "Canlı",
             rating = "8.7",
             plot = "Basketbol, motor sporları ve canlı yayınlar.",
-            addedOrder = 7
+            addedOrder = 107
         ),
         MediaCatalogItem(
             id = "mov_975",
             number = 1001,
             title = "9,75",
-            streamUrl = currentStreamUrl,
-            trailerUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
+            trailerUrl = fallbackUrl,
             section = MediaHubSection.MOVIES,
             category = "TR IMDB TOP 250",
             year = "2020-10-22",
@@ -708,14 +651,14 @@ class PlayerActivity : AppCompatActivity() {
             rating = "2.7",
             plot = "Ahmet, 1990'ların Güneydoğu Türkiye'de askerlik görevi sırasında, hayatının geri kalanında aklına takılmayacak bir şey yaşar. İstanbul'da Gezi Parkı eylemlerinin kaotik günlerinin başladığı 2013 yılında Ahmet, beyin tümörü taşıdığını öğrenir.",
             cast = listOf("Nejat İşler", "Funda Eryiğit", "Yusuf Mirza Zarg", "İsmail Mirhat Zarg", "Menderes Samancılar"),
-            addedOrder = 8
+            addedOrder = 108
         ),
         MediaCatalogItem(
             id = "mov_nf_1",
             number = 1002,
             title = "GÖLGELER İÇİNDE",
-            streamUrl = currentStreamUrl,
-            trailerUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
+            trailerUrl = fallbackUrl,
             section = MediaHubSection.MOVIES,
             category = "TR NETFLIX",
             year = "2024",
@@ -724,14 +667,14 @@ class PlayerActivity : AppCompatActivity() {
             rating = "7.8",
             plot = "Karanlık sırların peşindeki soruşturma beklenmedik bir noktaya taşınır.",
             cast = listOf("Başrol Oyuncu 1", "Başrol Oyuncu 2"),
-            addedOrder = 9
+            addedOrder = 109
         ),
         MediaCatalogItem(
             id = "mov_amz_1",
             number = 1003,
             title = "MAVZER",
-            streamUrl = currentStreamUrl,
-            trailerUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
+            trailerUrl = fallbackUrl,
             section = MediaHubSection.MOVIES,
             category = "TR AMAZON",
             year = "2020",
@@ -740,14 +683,14 @@ class PlayerActivity : AppCompatActivity() {
             rating = "7.4",
             plot = "Yüksek rakımlı dağ köyünde geçen çarpıcı bir dram hikayesi.",
             cast = listOf("Serhat Kılıç", "Ozan Acar"),
-            addedOrder = 10
+            addedOrder = 110
         ),
         MediaCatalogItem(
             id = "ser_1",
             number = 2001,
             title = "BAŞLANGIÇLAR SEZON 1",
-            streamUrl = currentStreamUrl,
-            trailerUrl = currentStreamUrl,
+            streamUrl = fallbackUrl,
+            trailerUrl = fallbackUrl,
             section = MediaHubSection.SERIES,
             category = "TR BOXSET",
             year = "2025",
@@ -756,15 +699,15 @@ class PlayerActivity : AppCompatActivity() {
             rating = "8.4",
             plot = "Yeni bir başlangıcın eşiğindeki karakterlerin kesişen hikayeleri.",
             cast = listOf("Kadro Üyesi A", "Kadro Üyesi B"),
-            addedOrder = 11
+            addedOrder = 111
         )
     )
 
-    private fun saveDeletedChannelUrls(urlsToAdd: Collection<String>) {
+    private fun saveDeletedItems(itemsToDelete: Collection<MediaCatalogItem>) {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
-        val existing = prefs.getStringSet("deleted_channel_urls", emptySet())?.toMutableSet() ?: mutableSetOf()
-        existing.addAll(urlsToAdd)
-        prefs.edit().putStringSet("deleted_channel_urls", existing).apply()
+        val existingIds = prefs.getStringSet("deleted_item_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
+        existingIds.addAll(itemsToDelete.map { it.id })
+        prefs.edit().putStringSet("deleted_item_ids", existingIds).apply()
     }
 
     private fun saveDeletedCategory(section: MediaHubSection, categoryName: String) {
@@ -787,18 +730,16 @@ class PlayerActivity : AppCompatActivity() {
                     it.section == section && it.category.equals(categoryName, ignoreCase = true)
                 }
                 val removedIds = matching.map { it.id }.toSet()
-                val removedUrls = matching.map { it.streamUrl }.filter { it.isNotBlank() }
-
                 activeItems.removeAll { it.id in removedIds }
                 saveDeletedCategory(section, categoryName)
-                if (removedUrls.isNotEmpty()) {
-                    saveDeletedChannelUrls(removedUrls)
+                if (matching.isNotEmpty()) {
+                    saveDeletedItems(matching)
                 }
 
                 Toast.makeText(this, "\"$categoryName\" listesi silindi", Toast.LENGTH_SHORT).show()
                 if (activeItems.isNotEmpty()) {
                     currentChannelIndex = currentChannelIndex.coerceIn(0, activeItems.lastIndex)
-                    updateHudLabels()
+                    updateHeaderTitle()
                 }
                 onComplete()
             }
@@ -821,20 +762,7 @@ class PlayerActivity : AppCompatActivity() {
             .apply()
     }
 
-    private fun toggleFavoriteForCurrentItem() {
-        if (currentStreamUrl.isEmpty()) return
-        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
-        if (favoriteUrls.contains(currentStreamUrl)) {
-            favoriteUrls.remove(currentStreamUrl)
-            showGestureToast("Favorilerden çıkarıldı")
-        } else {
-            favoriteUrls.add(currentStreamUrl)
-            showGestureToast("Favorilere eklendi")
-        }
-        prefs.edit().putStringSet("favorite_urls", favoriteUrls.toSet()).apply()
-    }
-
-    private fun showInitialCategoryHubDialog() {
+    private fun showCategoryHubDialog() {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
 
@@ -871,7 +799,7 @@ class PlayerActivity : AppCompatActivity() {
         btnTopUpdate.setOnClickListener {
             triggerCatalogUpdate()
             dialogRef?.dismiss()
-            showInitialCategoryHubDialog()
+            showCategoryHubDialog()
         }
 
         val dateStr = SimpleDateFormat("EEE dd MMM", Locale("tr")).format(Date()).uppercase(Locale("tr"))
@@ -904,7 +832,7 @@ class PlayerActivity : AppCompatActivity() {
         root.addView(sectionCards)
 
         val catScroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(-1, 360)
+            layoutParams = LinearLayout.LayoutParams(-1, 340)
         }
         val catCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         catScroll.addView(catCol)
@@ -1015,6 +943,7 @@ class PlayerActivity : AppCompatActivity() {
 
         dialogRef = AlertDialog.Builder(this)
             .setView(root)
+            .setNegativeButton("Kapat", null)
             .create()
         dialogRef.show()
     }
@@ -1055,9 +984,12 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun triggerCatalogUpdate() {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
-        prefs.edit().remove("deleted_category_keys").apply()
+        prefs.edit()
+            .remove("deleted_category_keys")
+            .remove("deleted_item_ids")
+            .apply()
         loadAccountsAndFavoritesAndCatalog(currentStreamUrl, currentStreamTitle)
-        updateHudLabels()
+        updateHeaderTitle()
         Toast.makeText(this, "Liste ve kategoriler güncellendi", Toast.LENGTH_SHORT).show()
     }
 
@@ -1128,6 +1060,19 @@ class PlayerActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun toggleFavoriteForCurrentItem() {
+        if (currentStreamUrl.isEmpty()) return
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
+        if (favoriteUrls.contains(currentStreamUrl)) {
+            favoriteUrls.remove(currentStreamUrl)
+            showGestureToast("Favorilerden çıkarıldı")
+        } else {
+            favoriteUrls.add(currentStreamUrl)
+            showGestureToast("Favorilere eklendi")
+        }
+        prefs.edit().putStringSet("favorite_urls", favoriteUrls.toSet()).apply()
+    }
+
     private fun createHubCard(icon: String, title: String, subtitle: String, onClick: () -> Unit): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1179,9 +1124,7 @@ class PlayerActivity : AppCompatActivity() {
             return if (baseCats.isEmpty()) emptyList() else listOf("TÜMÜ") + baseCats
         }
 
-        var selectedCategory = currentCategories().firstOrNull { it == "TR BEIN SPORT" }
-            ?: currentCategories().firstOrNull()
-            ?: "TÜMÜ"
+        var selectedCategory = "TÜMÜ"
         var searchQuery = ""
 
         val rootLayout = LinearLayout(this).apply {
@@ -1216,7 +1159,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val bodyRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(-1, 650)
+            layoutParams = LinearLayout.LayoutParams(-1, 600)
         }
 
         val leftCatScroll = ScrollView(this).apply {
@@ -1419,7 +1362,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val bodyRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(-1, 650)
+            layoutParams = LinearLayout.LayoutParams(-1, 600)
         }
 
         val catScroll = ScrollView(this).apply {
@@ -1662,8 +1605,7 @@ class PlayerActivity : AppCompatActivity() {
             if (target.isNotEmpty()) {
                 currentStreamUrl = target
                 currentStreamTitle = "${item.title} (Fragman)"
-                titleView.text = currentStreamTitle
-                updateHudLabels()
+                updateHeaderTitle()
                 initializePlayer(currentStreamUrl, 0L, true)
             } else {
                 Toast.makeText(this, "Fragman bağlantısı yok", Toast.LENGTH_SHORT).show()
@@ -1746,8 +1688,7 @@ class PlayerActivity : AppCompatActivity() {
         currentStreamTitle = item.title
         savedPosition = 0L
         savedPlayWhenReady = true
-        titleView.text = currentStreamTitle
-        updateHudLabels()
+        updateHeaderTitle()
         showGestureToast("▶ ${item.title}")
         initializePlayer(currentStreamUrl, 0L, true)
     }
@@ -1770,16 +1711,9 @@ class PlayerActivity : AppCompatActivity() {
         currentStreamTitle = target.title
         savedPosition = 0L
         savedPlayWhenReady = true
-        titleView.text = currentStreamTitle
-        updateHudLabels()
+        updateHeaderTitle()
         showGestureToast("📺 ${target.title}")
         initializePlayer(currentStreamUrl, 0L, true)
-    }
-
-    private fun updateHudLabels() {
-        val current = activeItems.getOrNull(currentChannelIndex)
-        bottomChannelNumberView.text = (current?.number ?: (currentChannelIndex + 1)).toString()
-        bottomChannelNameView.text = currentStreamTitle
     }
 
     private fun showChannelManagerDialog() {
@@ -1814,7 +1748,7 @@ class PlayerActivity : AppCompatActivity() {
             .setTitle("Silinecek Kanalı Seçin")
             .setItems(labels) { _, which ->
                 val removed = activeItems.removeAt(which)
-                saveDeletedChannelUrls(listOf(removed.streamUrl))
+                saveDeletedItems(listOf(removed))
                 Toast.makeText(this, "Silindi: ${removed.title}", Toast.LENGTH_SHORT).show()
                 if (activeItems.isEmpty()) {
                     finish()
@@ -1842,20 +1776,20 @@ class PlayerActivity : AppCompatActivity() {
                     Toast.makeText(this, "Kanal seçilmedi", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                val removedUrls = toRemove.map { it.streamUrl }
-                val currentRemoved = activeItems.getOrNull(currentChannelIndex)?.streamUrl in removedUrls
-                activeItems.removeAll { it.streamUrl in removedUrls }
-                saveDeletedChannelUrls(removedUrls)
+                val removedIds = toRemove.map { it.id }.toSet()
+                val currentRemoved = activeItems.getOrNull(currentChannelIndex)?.id in removedIds
+                activeItems.removeAll { it.id in removedIds }
+                saveDeletedItems(toRemove)
                 Toast.makeText(this, "${toRemove.size} kanal silindi", Toast.LENGTH_SHORT).show()
                 if (activeItems.isEmpty()) {
                     finish()
                 } else if (currentRemoved) {
                     playChannelAt(0)
                 } else {
-                    val idx = activeItems.indexOfFirst { it.streamUrl == currentStreamUrl }
+                    val idx = activeItems.indexOfFirst { it.id == currentItemMeta?.id }
                     if (idx >= 0) {
                         currentChannelIndex = idx
-                        updateHudLabels()
+                        updateHeaderTitle()
                     }
                 }
             }
@@ -2314,24 +2248,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun createHudPillButton(label: String, onClick: () -> Unit): TextView {
-        val sz = (42 * resources.displayMetrics.density).toInt()
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.parseColor("#33FFFFFF"))
-        }
-        return TextView(this).apply {
-            text = label
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            background = bg
-            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { setMargins(6, 0, 6, 0) }
-            setOnClickListener { onClick() }
-        }
-    }
-
     private fun createCircleControlButton(iconRes: Int, dp: Int, onClick: () -> Unit): ImageButton {
         val sz = (dp * resources.displayMetrics.density).toInt()
         return ImageButton(this).apply {
@@ -2348,7 +2264,6 @@ class PlayerActivity : AppCompatActivity() {
         val vis = if (visible) View.VISIBLE else View.GONE
         topOverlay.visibility = vis
         centerOverlay.visibility = vis
-        bottomHudOverlay.visibility = vis
         if (visible) resetHideTimer() else mainHandler.removeCallbacks(hideRunnable)
     }
 
