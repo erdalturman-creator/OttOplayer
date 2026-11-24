@@ -100,6 +100,13 @@ data class MediaCatalogItem(
     val addedOrder: Int = 0
 )
 
+private data class CategoryGroupEntry(
+    val section: MediaHubSection,
+    val category: String,
+    val key: String,
+    val label: String
+)
+
 class PlayerActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
@@ -429,6 +436,10 @@ class PlayerActivity : AppCompatActivity() {
         titleView.text = formatHeaderTitle()
     }
 
+    private fun makeCategoryKey(section: MediaHubSection, category: String): String {
+        return "${section.name}::${category.trim().uppercase(Locale.getDefault())}"
+    }
+
     private fun loadAccountsAndFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val savedAccounts = prefs.getStringSet("account_profiles", setOf("Varsayılan Hesap")) ?: setOf("Varsayılan Hesap")
@@ -532,7 +543,7 @@ class PlayerActivity : AppCompatActivity() {
         activeItems.clear()
         activeItems.addAll(
             rawList.filter { item ->
-                val catKey = "${item.section.name}::${item.category.uppercase(Locale.getDefault())}"
+                val catKey = makeCategoryKey(item.section, item.category)
                 val urlBlocked = item.streamUrl != fallbackUrl && item.streamUrl in deletedSet
                 item.id !in deletedIds && !urlBlocked && catKey !in deletedCategories
             }
@@ -638,6 +649,32 @@ class PlayerActivity : AppCompatActivity() {
             addedOrder = 107
         ),
         MediaCatalogItem(
+            id = "ch_al_1",
+            number = 501,
+            title = "AL: SUPERSPORT 1 HD",
+            streamUrl = fallbackUrl,
+            section = MediaHubSection.LIVE_TV,
+            category = "AL ALBANIA",
+            genre = "Canlı Spor",
+            durationText = "Canlı",
+            rating = "8.5",
+            plot = "Arnavutluk spor ve eğlence kanalı.",
+            addedOrder = 108
+        ),
+        MediaCatalogItem(
+            id = "ch_af_1",
+            number = 510,
+            title = "AF: DSTV SPORT 1",
+            streamUrl = fallbackUrl,
+            section = MediaHubSection.LIVE_TV,
+            category = "AF AFRICA",
+            genre = "Canlı Spor",
+            durationText = "Canlı",
+            rating = "8.3",
+            plot = "Afrika spor yayınları.",
+            addedOrder = 109
+        ),
+        MediaCatalogItem(
             id = "mov_975",
             number = 1001,
             title = "9,75",
@@ -651,7 +688,7 @@ class PlayerActivity : AppCompatActivity() {
             rating = "2.7",
             plot = "Ahmet, 1990'ların Güneydoğu Türkiye'de askerlik görevi sırasında, hayatının geri kalanında aklına takılmayacak bir şey yaşar. İstanbul'da Gezi Parkı eylemlerinin kaotik günlerinin başladığı 2013 yılında Ahmet, beyin tümörü taşıdığını öğrenir.",
             cast = listOf("Nejat İşler", "Funda Eryiğit", "Yusuf Mirza Zarg", "İsmail Mirhat Zarg", "Menderes Samancılar"),
-            addedOrder = 108
+            addedOrder = 110
         ),
         MediaCatalogItem(
             id = "mov_nf_1",
@@ -667,7 +704,7 @@ class PlayerActivity : AppCompatActivity() {
             rating = "7.8",
             plot = "Karanlık sırların peşindeki soruşturma beklenmedik bir noktaya taşınır.",
             cast = listOf("Başrol Oyuncu 1", "Başrol Oyuncu 2"),
-            addedOrder = 109
+            addedOrder = 111
         ),
         MediaCatalogItem(
             id = "mov_amz_1",
@@ -683,7 +720,7 @@ class PlayerActivity : AppCompatActivity() {
             rating = "7.4",
             plot = "Yüksek rakımlı dağ köyünde geçen çarpıcı bir dram hikayesi.",
             cast = listOf("Serhat Kılıç", "Ozan Acar"),
-            addedOrder = 110
+            addedOrder = 112
         ),
         MediaCatalogItem(
             id = "ser_1",
@@ -699,7 +736,7 @@ class PlayerActivity : AppCompatActivity() {
             rating = "8.4",
             plot = "Yeni bir başlangıcın eşiğindeki karakterlerin kesişen hikayeleri.",
             cast = listOf("Kadro Üyesi A", "Kadro Üyesi B"),
-            addedOrder = 111
+            addedOrder = 113
         )
     )
 
@@ -710,10 +747,10 @@ class PlayerActivity : AppCompatActivity() {
         prefs.edit().putStringSet("deleted_item_ids", existingIds).apply()
     }
 
-    private fun saveDeletedCategory(section: MediaHubSection, categoryName: String) {
+    private fun saveDeletedCategoryKeys(keysToAdd: Collection<String>) {
         val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
         val existing = prefs.getStringSet("deleted_category_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
-        existing.add("${section.name}::${categoryName.uppercase(Locale.getDefault())}")
+        existing.addAll(keysToAdd)
         prefs.edit().putStringSet("deleted_category_keys", existing).apply()
     }
 
@@ -731,7 +768,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 val removedIds = matching.map { it.id }.toSet()
                 activeItems.removeAll { it.id in removedIds }
-                saveDeletedCategory(section, categoryName)
+                saveDeletedCategoryKeys(listOf(makeCategoryKey(section, categoryName)))
                 if (matching.isNotEmpty()) {
                     saveDeletedItems(matching)
                 }
@@ -842,19 +879,22 @@ class PlayerActivity : AppCompatActivity() {
             val out = mutableListOf<Triple<MediaHubSection, String, String>>()
             val liveCats = allItems.filter { it.section == MediaHubSection.LIVE_TV }.map { it.category }.distinct()
             for (c in liveCats) {
-                val key = "${MediaHubSection.LIVE_TV.name}::${c.uppercase(Locale.getDefault())}"
-                if (key !in deletedCats) out.add(Triple(MediaHubSection.LIVE_TV, c, "Canlı TV"))
+                if (makeCategoryKey(MediaHubSection.LIVE_TV, c) !in deletedCats) {
+                    out.add(Triple(MediaHubSection.LIVE_TV, c, "Canlı TV"))
+                }
             }
             val vodDefaults = listOf("TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
             val movieCats = (vodDefaults + allItems.filter { it.section == MediaHubSection.MOVIES }.map { it.category }).distinct()
             for (c in movieCats) {
-                val key = "${MediaHubSection.MOVIES.name}::${c.uppercase(Locale.getDefault())}"
-                if (key !in deletedCats) out.add(Triple(MediaHubSection.MOVIES, c, "Filmler"))
+                if (makeCategoryKey(MediaHubSection.MOVIES, c) !in deletedCats) {
+                    out.add(Triple(MediaHubSection.MOVIES, c, "Filmler"))
+                }
             }
             val seriesCats = (vodDefaults + allItems.filter { it.section == MediaHubSection.SERIES }.map { it.category }).distinct()
             for (c in seriesCats) {
-                val key = "${MediaHubSection.SERIES.name}::${c.uppercase(Locale.getDefault())}"
-                if (key !in deletedCats) out.add(Triple(MediaHubSection.SERIES, c, "Diziler"))
+                if (makeCategoryKey(MediaHubSection.SERIES, c) !in deletedCats) {
+                    out.add(Triple(MediaHubSection.SERIES, c, "Diziler"))
+                }
             }
             return out
         }
@@ -865,7 +905,7 @@ class PlayerActivity : AppCompatActivity() {
             if (list.isEmpty()) {
                 catCol.addView(
                     TextView(this).apply {
-                        text = "Gösterilecek kategori yok. Üstteki Güncelle butonuna basabilirsiniz."
+                        text = "Gösterilecek kategori yok. Ayarlar veya Güncelle ile geri yükleyebilirsiniz."
                         setTextColor(Color.LTGRAY)
                         setPadding(12, 20, 12, 20)
                     }
@@ -963,6 +1003,8 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun showSettingsMenuDialog() {
         val options = arrayOf(
+            "Tek Kanal Seç Sil",
+            "Ülke / Kategori Listesi Seç Sil (Toplu)",
             "Güncelleme",
             "Hesap Seç",
             "Hesap Ekle",
@@ -972,13 +1014,107 @@ class PlayerActivity : AppCompatActivity() {
             .setTitle("Ayarlar ($activeAccount)")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> triggerCatalogUpdate()
-                    1 -> showSelectAccountDialog()
-                    2 -> showAddAccountDialog()
-                    3 -> showSwitchUserDialog()
+                    0 -> showSingleDeleteChannelDialog()
+                    1 -> showBulkCountryOrCategoryDeleteDialog()
+                    2 -> triggerCatalogUpdate()
+                    3 -> showSelectAccountDialog()
+                    4 -> showAddAccountDialog()
+                    5 -> showSwitchUserDialog()
                 }
             }
             .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun showBulkCountryOrCategoryDeleteDialog() {
+        val prefs = getSharedPreferences("erdal_trmn_tv_player_prefs", Context.MODE_PRIVATE)
+        val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
+
+        val entries = mutableListOf<CategoryGroupEntry>()
+        val seenKeys = mutableSetOf<String>()
+
+        fun addCategory(section: MediaHubSection, cat: String, sectionTag: String) {
+            val cleanCat = cat.trim()
+            if (cleanCat.isEmpty()) return
+            val key = makeCategoryKey(section, cleanCat)
+            if (key !in deletedCats && key !in seenKeys) {
+                seenKeys.add(key)
+                entries.add(
+                    CategoryGroupEntry(
+                        section = section,
+                        category = cleanCat,
+                        key = key,
+                        label = "[$sectionTag] $cleanCat"
+                    )
+                )
+            }
+        }
+
+        for (item in allItems) {
+            val tag = when (item.section) {
+                MediaHubSection.LIVE_TV -> "Canlı TV"
+                MediaHubSection.MOVIES -> "Filmler"
+                MediaHubSection.SERIES -> "Diziler"
+            }
+            addCategory(item.section, item.category, tag)
+        }
+
+        val commonVodCats = listOf("TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
+        for (vc in commonVodCats) {
+            addCategory(MediaHubSection.MOVIES, vc, "Filmler")
+            addCategory(MediaHubSection.SERIES, vc, "Diziler")
+        }
+
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "Silinecek ülke veya kategori listesi bulunamadı", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = entries.map { it.label }.toTypedArray()
+        val checked = BooleanArray(entries.size) { false }
+
+        AlertDialog.Builder(this)
+            .setTitle("Ülke / Kategori Listesi Seç Sil")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("Seçili Listeleri Sil") { _, _ ->
+                val selectedEntries = entries.indices.filter { checked[it] }.map { entries[it] }
+                if (selectedEntries.isEmpty()) {
+                    Toast.makeText(this, "Hiç liste seçilmedi", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+
+                val selectedKeys = selectedEntries.map { it.key }.toSet()
+                val matchingItems = activeItems.filter {
+                    makeCategoryKey(it.section, it.category) in selectedKeys
+                }
+                val removedIds = matchingItems.map { it.id }.toSet()
+                val currentRemoved = activeItems.getOrNull(currentChannelIndex)?.id in removedIds
+
+                activeItems.removeAll { it.id in removedIds }
+                saveDeletedCategoryKeys(selectedKeys)
+                if (matchingItems.isNotEmpty()) {
+                    saveDeletedItems(matchingItems)
+                }
+
+                Toast.makeText(
+                    this,
+                    "${selectedEntries.size} liste silindi",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                if (activeItems.isNotEmpty()) {
+                    if (currentRemoved) {
+                        playChannelAt(0)
+                    } else {
+                        val idx = activeItems.indexOfFirst { it.id == currentItemMeta?.id }
+                        if (idx >= 0) currentChannelIndex = idx
+                        updateHeaderTitle()
+                    }
+                }
+            }
+            .setNegativeButton("İptal", null)
             .show()
     }
 
@@ -1120,7 +1256,7 @@ class PlayerActivity : AppCompatActivity() {
                 .filter { it.section == MediaHubSection.LIVE_TV }
                 .map { it.category }
                 .distinct()
-                .filter { "${MediaHubSection.LIVE_TV.name}::${it.uppercase(Locale.getDefault())}" !in deletedCats }
+                .filter { makeCategoryKey(MediaHubSection.LIVE_TV, it) !in deletedCats }
             return if (baseCats.isEmpty()) emptyList() else listOf("TÜMÜ") + baseCats
         }
 
@@ -1308,7 +1444,7 @@ class PlayerActivity : AppCompatActivity() {
                 .map { it.category }
                 .distinct()
             val merged = (defaultCats + fromItems).distinct().filter {
-                "${section.name}::${it.uppercase(Locale.getDefault())}" !in deletedCats
+                makeCategoryKey(section, it) !in deletedCats
             }
             return if (merged.isEmpty()) emptyList() else listOf("TÜMÜ") + merged
         }
@@ -1745,7 +1881,7 @@ class PlayerActivity : AppCompatActivity() {
         if (activeItems.isEmpty()) return
         val labels = activeItems.map { "${it.number} - ${it.title}" }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("Silinecek Kanalı Seçin")
+            .setTitle("Tek Kanal Seç Sil")
             .setItems(labels) { _, which ->
                 val removed = activeItems.removeAt(which)
                 saveDeletedItems(listOf(removed))
