@@ -1,1 +1,4 @@
-Verification: Editörde <string name="app_name">by erdal trmn tv player</string>
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">by erdal trmn tv player</string>
+</resources>
