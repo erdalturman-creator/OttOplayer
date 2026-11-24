@@ -219,7 +219,8 @@ class PlayerActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        iconRow.addView(createIconButton(android.R.drawable.ic_menu_home) {
+        iconRow.addView(createIconButton(android.R.drawable.ic_menu_compass) {
+            
             resetHideTimer()
             showMediaHubDialog()
         })
