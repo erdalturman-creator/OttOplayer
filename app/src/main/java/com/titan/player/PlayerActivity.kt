@@ -118,6 +118,8 @@ class PlayerActivity : AppCompatActivity() {
     private val allItems = mutableListOf<MediaCatalogItem>()
     private val activeItems = mutableListOf<MediaCatalogItem>()
     private val favoriteUrls = mutableSetOf<String>()
+    private val accountProfiles = mutableListOf<String>()
+    private var activeAccount = "Varsayılan Hesap"
 
     private var currentChannelIndex = 0
     private var currentStreamUrl = ""
@@ -151,7 +153,7 @@ class PlayerActivity : AppCompatActivity() {
         val initialUrl = intent.getStringExtra("STREAM_URL")?.trim().orEmpty()
         val initialTitle = intent.getStringExtra("STREAM_TITLE")?.trim().orEmpty().ifEmpty { "OttOplayer" }
 
-        loadFavoritesAndCatalog(initialUrl, initialTitle)
+        loadAccountsAndFavoritesAndCatalog(initialUrl, initialTitle)
 
         if (activeItems.isEmpty() && initialUrl.isEmpty()) {
             finish()
@@ -221,7 +223,7 @@ class PlayerActivity : AppCompatActivity() {
 
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_compass) {
             resetHideTimer()
-            showMediaHubDialog()
+            showInitialCategoryHubDialog()
         })
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_info_details) {
             resetHideTimer()
@@ -475,6 +477,10 @@ class PlayerActivity : AppCompatActivity() {
         setContentView(root)
         updateHudLabels()
         resetHideTimer()
+
+        if (savedInstanceState == null) {
+            mainHandler.post { showInitialCategoryHubDialog() }
+        }
     }
 
     override fun onStart() {
@@ -506,8 +512,13 @@ class PlayerActivity : AppCompatActivity() {
         outState.putInt("CURRENT_CHANNEL_INDEX", currentChannelIndex)
     }
 
-    private fun loadFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
+    private fun loadAccountsAndFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
         val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val savedAccounts = prefs.getStringSet("account_profiles", setOf("Varsayılan Hesap")) ?: setOf("Varsayılan Hesap")
+        accountProfiles.clear()
+        accountProfiles.addAll(savedAccounts.filter { it.isNotBlank() }.ifEmpty { listOf("Varsayılan Hesap") })
+        activeAccount = prefs.getString("active_account", accountProfiles.first()).orEmpty().ifBlank { accountProfiles.first() }
+
         val deletedSet = prefs.getStringSet("deleted_channel_urls", emptySet())?.toSet() ?: emptySet()
         val deletedCategories = prefs.getStringSet("deleted_category_keys", emptySet())?.toSet() ?: emptySet()
         val extraSet = prefs.getStringSet("custom_channel_entries", emptySet())?.toSet() ?: emptySet()
@@ -802,6 +813,14 @@ class PlayerActivity : AppCompatActivity() {
         prefs.edit().putStringSet("custom_channel_entries", existing).apply()
     }
 
+    private fun persistAccounts() {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putStringSet("account_profiles", accountProfiles.toSet())
+            .putString("active_account", activeAccount)
+            .apply()
+    }
+
     private fun toggleFavoriteForCurrentItem() {
         if (currentStreamUrl.isEmpty()) return
         val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
@@ -815,69 +834,297 @@ class PlayerActivity : AppCompatActivity() {
         prefs.edit().putStringSet("favorite_urls", favoriteUrls.toSet()).apply()
     }
 
-    private fun showMediaHubDialog() {
-        val dateStr = SimpleDateFormat("EEE dd MMM", Locale("tr")).format(Date()).uppercase(Locale("tr"))
-        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+    private fun showInitialCategoryHubDialog() {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
 
-        val container = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FF111827"))
-            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.parseColor("#FF0F172A"))
+            setPadding(18, 18, 18, 14)
         }
 
-        val header = LinearLayout(this).apply {
+        val topHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 20) }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 14) }
         }
-        header.addView(
+        topHeader.addView(
             TextView(this).apply {
-                text = "1 STREAM"
+                text = "OTTODPLAYER · $activeAccount"
                 setTextColor(Color.WHITE)
-                textSize = 18f
+                textSize = 16f
                 typeface = Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             }
         )
-        header.addView(
-            TextView(this).apply {
-                text = "$timeStr  $dateStr"
-                setTextColor(Color.LTGRAY)
-                textSize = 13f
-                typeface = Typeface.DEFAULT_BOLD
-            }
-        )
-        container.addView(header)
+        val btnTopUpdate = Button(this).apply {
+            text = "Güncelle"
+            textSize = 12f
+        }
+        topHeader.addView(btnTopUpdate)
+        root.addView(topHeader)
 
         var dialogRef: AlertDialog? = null
 
-        val liveCount = activeItems.count { it.section == MediaHubSection.LIVE_TV }
-        val movieCount = activeItems.count { it.section == MediaHubSection.MOVIES }
-        val seriesCount = activeItems.count { it.section == MediaHubSection.SERIES }
-
-        val cardsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        btnTopUpdate.setOnClickListener {
+            triggerCatalogUpdate()
+            dialogRef?.dismiss()
+            showInitialCategoryHubDialog()
         }
-        cardsRow.addView(createHubCard("📺", "Canlı TV", "7800+ Kanallar ($liveCount)") {
+
+        val dateStr = SimpleDateFormat("EEE dd MMM", Locale("tr")).format(Date()).uppercase(Locale("tr"))
+        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        root.addView(
+            TextView(this).apply {
+                text = "$timeStr  $dateStr  ·  Kategoriyi silmek için basılı tutun"
+                setTextColor(Color.LTGRAY)
+                textSize = 12f
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 12) }
+            }
+        )
+
+        val sectionCards = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 14) }
+        }
+        sectionCards.addView(createHubCard("📺", "Canlı TV", "TV Kategorileri") {
             dialogRef?.dismiss()
             showLiveTvCatalogDialog()
         })
-        cardsRow.addView(createHubCard("🎬", "Filmler", "36100+ Filmler ($movieCount)") {
+        sectionCards.addView(createHubCard("🎬", "Filmler", "Film Kategorileri") {
             dialogRef?.dismiss()
             showVodCatalogDialog(MediaHubSection.MOVIES)
         })
-        cardsRow.addView(createHubCard("🎞️", "Dizi", "3500+ Dizi ($seriesCount)") {
+        sectionCards.addView(createHubCard("🎞️", "Dizi", "Dizi Kategorileri") {
             dialogRef?.dismiss()
             showVodCatalogDialog(MediaHubSection.SERIES)
         })
-        container.addView(cardsRow)
+        root.addView(sectionCards)
+
+        val catScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, 360)
+        }
+        val catCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        catScroll.addView(catCol)
+        root.addView(catScroll)
+
+        fun buildAllCategories(): List<Triple<MediaHubSection, String, String>> {
+            val out = mutableListOf<Triple<MediaHubSection, String, String>>()
+            val liveCats = allItems.filter { it.section == MediaHubSection.LIVE_TV }.map { it.category }.distinct()
+            for (c in liveCats) {
+                val key = "${MediaHubSection.LIVE_TV.name}::${c.uppercase(Locale.getDefault())}"
+                if (key !in deletedCats) out.add(Triple(MediaHubSection.LIVE_TV, c, "Canlı TV"))
+            }
+            val vodDefaults = listOf("TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
+            val movieCats = (vodDefaults + allItems.filter { it.section == MediaHubSection.MOVIES }.map { it.category }).distinct()
+            for (c in movieCats) {
+                val key = "${MediaHubSection.MOVIES.name}::${c.uppercase(Locale.getDefault())}"
+                if (key !in deletedCats) out.add(Triple(MediaHubSection.MOVIES, c, "Filmler"))
+            }
+            val seriesCats = (vodDefaults + allItems.filter { it.section == MediaHubSection.SERIES }.map { it.category }).distinct()
+            for (c in seriesCats) {
+                val key = "${MediaHubSection.SERIES.name}::${c.uppercase(Locale.getDefault())}"
+                if (key !in deletedCats) out.add(Triple(MediaHubSection.SERIES, c, "Diziler"))
+            }
+            return out
+        }
+
+        fun refreshCategoryRows() {
+            catCol.removeAllViews()
+            val list = buildAllCategories()
+            if (list.isEmpty()) {
+                catCol.addView(
+                    TextView(this).apply {
+                        text = "Gösterilecek kategori yok. Üstteki Güncelle butonuna basabilirsiniz."
+                        setTextColor(Color.LTGRAY)
+                        setPadding(12, 20, 12, 20)
+                    }
+                )
+                return
+            }
+            for ((sec, catName, secLabel) in list) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setBackgroundColor(Color.parseColor("#FF1E293B"))
+                    setPadding(18, 16, 18, 16)
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 8) }
+                    setOnClickListener {
+                        dialogRef?.dismiss()
+                        if (sec == MediaHubSection.LIVE_TV) showLiveTvCatalogDialog()
+                        else showVodCatalogDialog(sec)
+                    }
+                    setOnLongClickListener {
+                        deleteEntireCategoryList(sec, catName) {
+                            refreshCategoryRows()
+                        }
+                        true
+                    }
+                }
+                row.addView(
+                    TextView(this).apply {
+                        text = catName
+                        setTextColor(Color.WHITE)
+                        textSize = 14f
+                        typeface = Typeface.DEFAULT_BOLD
+                        layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                    }
+                )
+                row.addView(
+                    TextView(this).apply {
+                        text = secLabel
+                        setTextColor(Color.parseColor("#FF93C5FD"))
+                        textSize = 12f
+                    }
+                )
+                catCol.addView(row)
+            }
+        }
+
+        refreshCategoryRows()
+
+        val bottomNav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#FF111827"))
+            setPadding(8, 12, 8, 8)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 12, 0, 0) }
+        }
+        bottomNav.addView(createBottomNavTab("Favoriler") {
+            dialogRef?.dismiss()
+            showFavoritesDialog()
+        })
+        bottomNav.addView(createBottomNavTab("TV") {
+            dialogRef?.dismiss()
+            showLiveTvCatalogDialog()
+        })
+        bottomNav.addView(createBottomNavTab("Filmler") {
+            dialogRef?.dismiss()
+            showVodCatalogDialog(MediaHubSection.MOVIES)
+        })
+        bottomNav.addView(createBottomNavTab("Diziler") {
+            dialogRef?.dismiss()
+            showVodCatalogDialog(MediaHubSection.SERIES)
+        })
+        bottomNav.addView(createBottomNavTab("Ayarlar") {
+            showSettingsMenuDialog()
+        })
+        root.addView(bottomNav)
 
         dialogRef = AlertDialog.Builder(this)
-            .setView(container)
-            .setNegativeButton("Kapat", null)
+            .setView(root)
             .create()
         dialogRef.show()
+    }
+
+    private fun createBottomNavTab(label: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(6, 12, 6, 12)
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun showSettingsMenuDialog() {
+        val options = arrayOf(
+            "Güncelleme",
+            "Hesap Seç",
+            "Hesap Ekle",
+            "Kullanıcı Değiştir"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Ayarlar ($activeAccount)")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> triggerCatalogUpdate()
+                    1 -> showSelectAccountDialog()
+                    2 -> showAddAccountDialog()
+                    3 -> showSwitchUserDialog()
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun triggerCatalogUpdate() {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        prefs.edit().remove("deleted_category_keys").apply()
+        loadAccountsAndFavoritesAndCatalog(currentStreamUrl, currentStreamTitle)
+        updateHudLabels()
+        Toast.makeText(this, "Liste ve kategoriler güncellendi", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showSelectAccountDialog() {
+        val list = accountProfiles.toTypedArray()
+        val currentIdx = list.indexOf(activeAccount).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Hesap Seç")
+            .setSingleChoiceItems(list, currentIdx) { dialog, which ->
+                activeAccount = list[which]
+                persistAccounts()
+                Toast.makeText(this, "Seçilen hesap: $activeAccount", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun showAddAccountDialog() {
+        val input = EditText(this).apply {
+            hint = "Yeni hesap adı"
+            setTextColor(Color.BLACK)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Hesap Ekle")
+            .setView(input)
+            .setPositiveButton("Ekle") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "Hesap adı boş olamaz", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (!accountProfiles.contains(name)) {
+                    accountProfiles.add(name)
+                }
+                activeAccount = name
+                persistAccounts()
+                Toast.makeText(this, "Hesap eklendi ve aktif edildi: $name", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun showSwitchUserDialog() {
+        if (accountProfiles.size <= 1) {
+            showAddAccountDialog()
+            return
+        }
+        val nextIdx = (accountProfiles.indexOf(activeAccount) + 1) % accountProfiles.size
+        activeAccount = accountProfiles[nextIdx]
+        persistAccounts()
+        Toast.makeText(this, "Kullanıcı değiştirildi: $activeAccount", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showFavoritesDialog() {
+        val favItems = allItems.filter { it.streamUrl.isNotEmpty() && it.streamUrl in favoriteUrls }
+        if (favItems.isEmpty()) {
+            Toast.makeText(this, "Favori içerik bulunmuyor", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = favItems.map { "${it.number} - ${it.title}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Favoriler")
+            .setItems(labels) { _, which ->
+                playCatalogItem(favItems[which])
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
     }
 
     private fun createHubCard(icon: String, title: String, subtitle: String, onClick: () -> Unit): LinearLayout {
@@ -885,14 +1132,14 @@ class PlayerActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(Color.parseColor("#FF1F2937"))
-            setPadding(16, 28, 16, 28)
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(8, 0, 8, 0) }
+            setPadding(14, 20, 14, 20)
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(6, 0, 6, 0) }
             setOnClickListener { onClick() }
 
             addView(
                 TextView(this@PlayerActivity).apply {
                     text = icon
-                    textSize = 26f
+                    textSize = 22f
                     gravity = Gravity.CENTER
                 }
             )
@@ -900,17 +1147,17 @@ class PlayerActivity : AppCompatActivity() {
                 TextView(this@PlayerActivity).apply {
                     text = title
                     setTextColor(Color.WHITE)
-                    textSize = 16f
+                    textSize = 14f
                     typeface = Typeface.DEFAULT_BOLD
                     gravity = Gravity.CENTER
-                    setPadding(0, 12, 0, 4)
+                    setPadding(0, 8, 0, 2)
                 }
             )
             addView(
                 TextView(this@PlayerActivity).apply {
                     text = subtitle
                     setTextColor(Color.parseColor("#FF9CA3AF"))
-                    textSize = 11f
+                    textSize = 10f
                     gravity = Gravity.CENTER
                 }
             )
