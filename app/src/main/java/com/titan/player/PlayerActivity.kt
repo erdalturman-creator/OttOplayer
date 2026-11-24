@@ -220,7 +220,6 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         iconRow.addView(createIconButton(android.R.drawable.ic_menu_compass) {
-            
             resetHideTimer()
             showMediaHubDialog()
         })
@@ -510,6 +509,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun loadFavoritesAndCatalog(initialUrl: String, initialTitle: String) {
         val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
         val deletedSet = prefs.getStringSet("deleted_channel_urls", emptySet())?.toSet() ?: emptySet()
+        val deletedCategories = prefs.getStringSet("deleted_category_keys", emptySet())?.toSet() ?: emptySet()
         val extraSet = prefs.getStringSet("custom_channel_entries", emptySet())?.toSet() ?: emptySet()
         favoriteUrls.clear()
         favoriteUrls.addAll(prefs.getStringSet("favorite_urls", emptySet()) ?: emptySet())
@@ -580,7 +580,12 @@ class PlayerActivity : AppCompatActivity() {
         allItems.addAll(rawList)
 
         activeItems.clear()
-        activeItems.addAll(rawList.filter { it.streamUrl !in deletedSet })
+        activeItems.addAll(
+            rawList.filter { item ->
+                val catKey = "${item.section.name}::${item.category.uppercase(Locale.getDefault())}"
+                item.streamUrl !in deletedSet && catKey !in deletedCategories
+            }
+        )
 
         val matchIdx = activeItems.indexOfFirst { it.streamUrl == currentStreamUrl || it.streamUrl == initialUrl }
         currentChannelIndex = if (matchIdx >= 0) matchIdx else 0
@@ -751,6 +756,45 @@ class PlayerActivity : AppCompatActivity() {
         prefs.edit().putStringSet("deleted_channel_urls", existing).apply()
     }
 
+    private fun saveDeletedCategory(section: MediaHubSection, categoryName: String) {
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getStringSet("deleted_category_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
+        existing.add("${section.name}::${categoryName.uppercase(Locale.getDefault())}")
+        prefs.edit().putStringSet("deleted_category_keys", existing).apply()
+    }
+
+    private fun deleteEntireCategoryList(
+        section: MediaHubSection,
+        categoryName: String,
+        onComplete: () -> Unit
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Listeyi Sil")
+            .setMessage("\"$categoryName\" listesini komple silmek ister misiniz?")
+            .setPositiveButton("Evet, Sil") { _, _ ->
+                val matching = activeItems.filter {
+                    it.section == section && it.category.equals(categoryName, ignoreCase = true)
+                }
+                val removedIds = matching.map { it.id }.toSet()
+                val removedUrls = matching.map { it.streamUrl }.filter { it.isNotBlank() }
+
+                activeItems.removeAll { it.id in removedIds }
+                saveDeletedCategory(section, categoryName)
+                if (removedUrls.isNotEmpty()) {
+                    saveDeletedChannelUrls(removedUrls)
+                }
+
+                Toast.makeText(this, "\"$categoryName\" listesi silindi", Toast.LENGTH_SHORT).show()
+                if (activeItems.isNotEmpty()) {
+                    currentChannelIndex = currentChannelIndex.coerceIn(0, activeItems.lastIndex)
+                    updateHudLabels()
+                }
+                onComplete()
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
     private fun saveCustomChannel(title: String, url: String) {
         val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
         val existing = prefs.getStringSet("custom_channel_entries", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -807,9 +851,9 @@ class PlayerActivity : AppCompatActivity() {
 
         var dialogRef: AlertDialog? = null
 
-        val liveCount = activeItems.count { it.section == MediaHubSection.LIVE_TV }.coerceAtLeast(1)
-        val movieCount = activeItems.count { it.section == MediaHubSection.MOVIES }.coerceAtLeast(1)
-        val seriesCount = activeItems.count { it.section == MediaHubSection.SERIES }.coerceAtLeast(1)
+        val liveCount = activeItems.count { it.section == MediaHubSection.LIVE_TV }
+        val movieCount = activeItems.count { it.section == MediaHubSection.MOVIES }
+        val seriesCount = activeItems.count { it.section == MediaHubSection.SERIES }
 
         val cardsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -874,9 +918,22 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showLiveTvCatalogDialog() {
-        val liveSource = activeItems.filter { it.section == MediaHubSection.LIVE_TV }.ifEmpty { activeItems }
-        val categories = listOf("TÜMÜ") + liveSource.map { it.category }.distinct()
-        var selectedCategory = categories.firstOrNull { it == "TR BEIN SPORT" } ?: "TÜMÜ"
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
+
+        fun currentLiveSource() = activeItems.filter { it.section == MediaHubSection.LIVE_TV }
+        fun currentCategories(): List<String> {
+            val baseCats = allItems
+                .filter { it.section == MediaHubSection.LIVE_TV }
+                .map { it.category }
+                .distinct()
+                .filter { "${MediaHubSection.LIVE_TV.name}::${it.uppercase(Locale.getDefault())}" !in deletedCats }
+            return if (baseCats.isEmpty()) emptyList() else listOf("TÜMÜ") + baseCats
+        }
+
+        var selectedCategory = currentCategories().firstOrNull { it == "TR BEIN SPORT" }
+            ?: currentCategories().firstOrNull()
+            ?: "TÜMÜ"
         var searchQuery = ""
 
         val rootLayout = LinearLayout(this).apply {
@@ -892,9 +949,9 @@ class PlayerActivity : AppCompatActivity() {
         }
         topBar.addView(
             TextView(this).apply {
-                text = "1 STREAM · Canlı TV"
+                text = "1 STREAM · Canlı TV (Listeyi silmek için basılı tutun)"
                 setTextColor(Color.WHITE)
-                textSize = 16f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             }
@@ -904,7 +961,7 @@ class PlayerActivity : AppCompatActivity() {
             setHintTextColor(Color.LTGRAY)
             setTextColor(Color.WHITE)
             textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(280, -2)
+            layoutParams = LinearLayout.LayoutParams(240, -2)
         }
         topBar.addView(searchBox)
         rootLayout.addView(topBar)
@@ -934,6 +991,7 @@ class PlayerActivity : AppCompatActivity() {
 
         fun refreshRightList() {
             rightListCol.removeAllViews()
+            val liveSource = currentLiveSource()
             val filtered = liveSource.filter { item ->
                 val catOk = selectedCategory == "TÜMÜ" || item.category.equals(selectedCategory, ignoreCase = true)
                 val queryOk = searchQuery.isBlank() ||
@@ -945,7 +1003,7 @@ class PlayerActivity : AppCompatActivity() {
             if (filtered.isEmpty()) {
                 rightListCol.addView(
                     TextView(this).apply {
-                        text = "Eşleşen kanal bulunamadı"
+                        text = "Bu listede gösterilecek kanal yok"
                         setTextColor(Color.LTGRAY)
                         setPadding(16, 24, 16, 24)
                     }
@@ -992,7 +1050,11 @@ class PlayerActivity : AppCompatActivity() {
 
         fun rebuildCategories() {
             leftCatCol.removeAllViews()
-            for (cat in categories) {
+            val cats = currentCategories()
+            if (selectedCategory !in cats) {
+                selectedCategory = cats.firstOrNull() ?: "TÜMÜ"
+            }
+            for (cat in cats) {
                 val active = cat.equals(selectedCategory, ignoreCase = true)
                 leftCatCol.addView(
                     TextView(this).apply {
@@ -1010,6 +1072,15 @@ class PlayerActivity : AppCompatActivity() {
                             selectedCategory = cat
                             rebuildCategories()
                             refreshRightList()
+                        }
+                        if (cat != "TÜMÜ") {
+                            setOnLongClickListener {
+                                deleteEntireCategoryList(MediaHubSection.LIVE_TV, cat) {
+                                    rebuildCategories()
+                                    refreshRightList()
+                                }
+                                true
+                            }
                         }
                     }
                 )
@@ -1036,10 +1107,23 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showVodCatalogDialog(section: MediaHubSection) {
-        val sectionItems = allItems.filter { it.section == section }.ifEmpty { allItems }
-        val categories = listOf("TÜMÜ", "TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
+        val prefs = getSharedPreferences("ottoplayer_prefs", Context.MODE_PRIVATE)
+        val deletedCats = prefs.getStringSet("deleted_category_keys", emptySet()) ?: emptySet()
+        val defaultCats = listOf("TR 3D", "TR IMDB TOP 250", "TR BOXSET", "TR NETFLIX", "TR AMAZON", "TR BOLLYWOD")
+
+        fun currentCategories(): List<String> {
+            val fromItems = allItems
+                .filter { it.section == section }
+                .map { it.category }
+                .distinct()
+            val merged = (defaultCats + fromItems).distinct().filter {
+                "${section.name}::${it.uppercase(Locale.getDefault())}" !in deletedCats
+            }
+            return if (merged.isEmpty()) emptyList() else listOf("TÜMÜ") + merged
+        }
+
         var selectedCategory = "TÜMÜ"
-        var sortMode = 0 // 0: Varsayılan, 1: Son Eklenen, 2: Tarih, 3: Puan
+        var sortMode = 0
         var searchQuery = ""
 
         val sortLabels = listOf(
@@ -1060,11 +1144,12 @@ class PlayerActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, 12) }
         }
+        val sectionTitle = if (section == MediaHubSection.MOVIES) "Filmler" else "Diziler"
         topBar.addView(
             TextView(this).apply {
-                text = if (section == MediaHubSection.MOVIES) "Filmler" else "Diziler"
+                text = "$sectionTitle · Listeyi silmek için basılı tutun"
                 setTextColor(Color.WHITE)
-                textSize = 17f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             }
@@ -1074,7 +1159,7 @@ class PlayerActivity : AppCompatActivity() {
             setHintTextColor(Color.LTGRAY)
             setTextColor(Color.WHITE)
             textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(200, -2)
+            layoutParams = LinearLayout.LayoutParams(180, -2)
         }
         val btnSort = Button(this).apply {
             text = sortLabels[sortMode]
@@ -1112,6 +1197,7 @@ class PlayerActivity : AppCompatActivity() {
 
         fun refreshGrid() {
             gridLayout.removeAllViews()
+            val sectionItems = activeItems.filter { it.section == section }
             val filtered = sectionItems.filter { item ->
                 val catOk = selectedCategory == "TÜMÜ" || item.category.equals(selectedCategory, ignoreCase = true)
                 val qOk = searchQuery.isBlank() || item.title.contains(searchQuery, ignoreCase = true)
@@ -1127,7 +1213,7 @@ class PlayerActivity : AppCompatActivity() {
             if (sorted.isEmpty()) {
                 gridLayout.addView(
                     TextView(this).apply {
-                        text = "İçerik bulunamadı"
+                        text = "Bu listede gösterilecek içerik yok"
                         setTextColor(Color.LTGRAY)
                         setPadding(16, 24, 16, 24)
                     }
@@ -1185,7 +1271,11 @@ class PlayerActivity : AppCompatActivity() {
 
         fun rebuildCategories() {
             catCol.removeAllViews()
-            for (cat in categories) {
+            val cats = currentCategories()
+            if (selectedCategory !in cats) {
+                selectedCategory = cats.firstOrNull() ?: "TÜMÜ"
+            }
+            for (cat in cats) {
                 val isSel = cat.equals(selectedCategory, ignoreCase = true)
                 catCol.addView(
                     TextView(this).apply {
@@ -1203,6 +1293,15 @@ class PlayerActivity : AppCompatActivity() {
                             selectedCategory = cat
                             rebuildCategories()
                             refreshGrid()
+                        }
+                        if (cat != "TÜMÜ") {
+                            setOnLongClickListener {
+                                deleteEntireCategoryList(section, cat) {
+                                    rebuildCategories()
+                                    refreshGrid()
+                                }
+                                true
+                            }
                         }
                     }
                 )
@@ -1567,7 +1666,7 @@ class PlayerActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val normalized = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
-                val lower = normalized.lowercase()
+                val lower = normalized.lowercase(Locale.getDefault())
                 if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mkv") || lower.contains(".ts")) {
                     saveCustomChannel(customTitle, normalized)
                     val newItem = MediaCatalogItem(
@@ -1633,7 +1732,7 @@ class PlayerActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val targetUrl = request?.url?.toString().orEmpty()
-                val lower = targetUrl.lowercase()
+                val lower = targetUrl.lowercase(Locale.getDefault())
                 if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mkv")) {
                     saveCustomChannel(platformName, targetUrl)
                     dialogRef?.dismiss()
